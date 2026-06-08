@@ -14,6 +14,7 @@ export default function MateriasScreen() {
   const [cor, setCor] = useState(COLORS[0]);
   const [icone, setIcone] = useState("book");
   const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
   const navigate = useNavigate();
 
   const load = () => api.get("/materias").then((r) => setList(r.data));
@@ -21,11 +22,14 @@ export default function MateriasScreen() {
 
   const create = async (e) => {
     e.preventDefault();
+    setErr(null);
     setLoading(true);
     try {
       await api.post("/materias", { nome, cor, icone });
       setOpen(false); setNome(""); setCor(COLORS[0]); setIcone("book");
       load();
+    } catch (ex) {
+      setErr(ex?.response?.data?.detail || "Erro ao criar matéria");
     } finally { setLoading(false); }
   };
 
@@ -87,12 +91,12 @@ export default function MateriasScreen() {
             <motion.div
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               onClick={() => setOpen(false)}
-              className="fixed inset-0 bg-black/70 z-40"
+              className="fixed inset-0 bg-black/70 z-[55]"
             />
             <motion.div
               initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }}
               transition={{ type: "spring", damping: 30 }}
-              className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md bg-[#12141D] rounded-t-3xl z-50 p-6 border-t border-[#262A36]"
+              className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md bg-[#12141D] rounded-t-3xl z-[60] p-6 border-t border-[#262A36]"
               data-testid="create-materia-sheet"
             >
               <div className="w-10 h-1 bg-[#262A36] rounded-full mx-auto mb-5" />
@@ -131,6 +135,7 @@ export default function MateriasScreen() {
                 <button type="submit" disabled={loading || !nome.trim()} className="sl-btn-primary mt-2" data-testid="submit-materia">
                   {loading ? "Criando..." : "Criar matéria"}
                 </button>
+                {err && <p className="text-[#FF6B6B] text-sm mt-2" data-testid="materia-error">{err}</p>}
               </form>
             </motion.div>
           </>

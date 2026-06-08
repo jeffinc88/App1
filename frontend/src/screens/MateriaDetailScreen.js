@@ -170,10 +170,10 @@ function AddContentSheet({ open, onClose, materiaId, onCreated }) {
       {open && (
         <>
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            onClick={close} className="fixed inset-0 bg-black/70 z-40" />
+            onClick={close} className="fixed inset-0 bg-black/70 z-[55]" />
           <motion.div initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }}
             transition={{ type: "spring", damping: 30 }}
-            className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md bg-[#12141D] rounded-t-3xl z-50 p-6 border-t border-[#262A36] max-h-[88vh] overflow-y-auto sl-scroll"
+            className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md bg-[#12141D] rounded-t-3xl z-[60] p-6 border-t border-[#262A36] max-h-[88vh] overflow-y-auto sl-scroll"
             data-testid="add-content-sheet"
           >
             <div className="w-10 h-1 bg-[#262A36] rounded-full mx-auto mb-5" />

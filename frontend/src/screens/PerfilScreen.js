@@ -160,10 +160,10 @@ function PaywallModal({ onClose }) {
   ];
   return (
     <>
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={onClose} className="fixed inset-0 bg-black/80 z-40" />
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={onClose} className="fixed inset-0 bg-black/80 z-[55]" />
       <motion.div
         initial={{ y: "100%" }} animate={{ y: 0 }} transition={{ type: "spring", damping: 30 }}
-        className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md bg-[#12141D] rounded-t-3xl z-50 p-6 border-t border-[#F5A623]/30"
+        className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md bg-[#12141D] rounded-t-3xl z-[60] p-6 border-t border-[#F5A623]/30"
         data-testid="paywall-modal"
       >
         <div className="w-10 h-1 bg-[#262A36] rounded-full mx-auto mb-5" />
