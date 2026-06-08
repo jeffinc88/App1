@@ -318,6 +318,117 @@ async def complete_onboarding(body: dict, user: dict = Depends(current_user)):
     return {"ok": True}
 
 
+# ---------- PLAN LIMITS & UPGRADE ----------
+FREE_FONTES_MAX = 3
+FREE_SESSOES_MENSAIS_MAX = 5
+PRO_PRICE_BRL = 29.0
+
+
+def _month_start_iso():
+    n = now_utc()
+    return n.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+
+async def _plan_status(user: dict) -> dict:
+    is_pro = user.get("plano") == "pro"
+    fontes_used = await db.fontes.count_documents({"user_id": user["user_id"]})
+    month_start = _month_start_iso()
+    sessoes_used = await db.sessoes.count_documents({
+        "user_id": user["user_id"],
+        "tipo": {"$in": ["quiz", "5min"]},
+        "created_at": {"$gte": month_start},
+    })
+    return {
+        "plano": user.get("plano", "free"),
+        "is_pro": is_pro,
+        "fontes_used": fontes_used,
+        "fontes_max": None if is_pro else FREE_FONTES_MAX,
+        "sessoes_mes_used": sessoes_used,
+        "sessoes_mes_max": None if is_pro else FREE_SESSOES_MENSAIS_MAX,
+        "can_use_foto_pdf": is_pro,
+        "pro_price_brl": PRO_PRICE_BRL,
+    }
+
+
+@api.get("/plan/status")
+async def plan_status(user: dict = Depends(current_user)):
+    return await _plan_status(user)
+
+
+def _paywall_response(motivo: str, **extra):
+    return HTTPException(
+        status_code=402,
+        detail={"code": "free_limit", "motivo": motivo, **extra},
+    )
+
+
+async def _enforce_fonte_limit(user: dict, tipo: str):
+    if user.get("plano") == "pro":
+        return
+    if tipo in ("pdf", "foto"):
+        raise _paywall_response("foto_pdf", tipo=tipo)
+    used = await db.fontes.count_documents({"user_id": user["user_id"]})
+    if used >= FREE_FONTES_MAX:
+        raise _paywall_response("fonte_limite", used=used, max=FREE_FONTES_MAX)
+
+
+async def _enforce_sessao_limit(user: dict, tipo: str):
+    if user.get("plano") == "pro":
+        return
+    if tipo not in ("quiz", "5min"):
+        return
+    month_start = _month_start_iso()
+    used = await db.sessoes.count_documents({
+        "user_id": user["user_id"],
+        "tipo": {"$in": ["quiz", "5min"]},
+        "created_at": {"$gte": month_start},
+    })
+    if used >= FREE_SESSOES_MENSAIS_MAX:
+        raise _paywall_response("sessao_limite", used=used, max=FREE_SESSOES_MENSAIS_MAX)
+
+
+@api.post("/plan/upgrade")
+async def plan_upgrade(user: dict = Depends(current_user)):
+    """MOCKED upgrade — sets plano=pro and records a payment. Replace with Stripe later."""
+    if user.get("plano") == "pro":
+        return {"ok": True, "already_pro": True}
+    payment_id = new_id("pay")
+    await db.payments.insert_one({
+        "payment_id": payment_id,
+        "user_id": user["user_id"],
+        "amount": PRO_PRICE_BRL,
+        "currency": "BRL",
+        "status": "success",
+        "method": "mock",
+        "created_at": now_utc().isoformat(),
+    })
+    await db.users.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": {"plano": "pro", "pro_since": now_utc().isoformat()}},
+    )
+    fresh = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0, "password_hash": 0})
+    return {"ok": True, "user": fresh, "payment_id": payment_id, "amount": PRO_PRICE_BRL}
+
+
+# ---------- ANALYTICS ----------
+class AnalyticsIn(BaseModel):
+    name: str
+    props: Optional[dict] = None
+
+
+@api.post("/analytics/event")
+async def track_event(body: AnalyticsIn, user: dict = Depends(current_user)):
+    doc = {
+        "event_id": new_id("evt"),
+        "user_id": user["user_id"],
+        "name": body.name[:120],
+        "props": body.props or {},
+        "created_at": now_utc().isoformat(),
+    }
+    await db.analytics_events.insert_one(doc)
+    return {"ok": True, "event_id": doc["event_id"]}
+
+
 # ---------- MATERIAS ----------
 @api.post("/materias")
 async def create_materia(body: MateriaIn, user: dict = Depends(current_user)):
@@ -539,12 +650,14 @@ async def _create_fonte_and_generate(user_id: str, materia_id: str, titulo: str,
 @api.post("/fontes/text")
 async def add_text_source(body: FonteCreateText, user: dict = Depends(current_user)):
     await _check_materia(body.materia_id, user["user_id"])
+    await _enforce_fonte_limit(user, "texto")
     return await _create_fonte_and_generate(user["user_id"], body.materia_id, body.titulo, "texto", body.conteudo)
 
 
 @api.post("/fontes/link")
 async def add_link_source(body: FonteCreateLink, user: dict = Depends(current_user)):
     await _check_materia(body.materia_id, user["user_id"])
+    await _enforce_fonte_limit(user, "link")
     title, text = _scrape_url(body.url)
     return await _create_fonte_and_generate(user["user_id"], body.materia_id, body.titulo or title, "link", text)
 
@@ -557,6 +670,7 @@ async def add_pdf_source(
     user: dict = Depends(current_user),
 ):
     await _check_materia(materia_id, user["user_id"])
+    await _enforce_fonte_limit(user, "pdf")
     content = await file.read()
     text = _extract_pdf(content)
     if not text.strip():
@@ -572,6 +686,7 @@ async def add_photo_source(
     user: dict = Depends(current_user),
 ):
     await _check_materia(materia_id, user["user_id"])
+    await _enforce_fonte_limit(user, "foto")
     img = await file.read()
     text = await _ocr_with_claude(img)
     if not text.strip():

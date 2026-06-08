@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "./AuthContext";
+import { PaywallProvider } from "./PaywallContext";
 import AuthCallback from "./AuthCallback";
 import LoginScreen from "./screens/LoginScreen";
 import OnboardingScreen from "./screens/OnboardingScreen";
@@ -75,7 +76,9 @@ export default function App() {
   return (
     <AuthProvider>
       <BrowserRouter>
-        <AppRouter />
+        <PaywallProvider>
+          <AppRouter />
+        </PaywallProvider>
       </BrowserRouter>
     </AuthProvider>
   );

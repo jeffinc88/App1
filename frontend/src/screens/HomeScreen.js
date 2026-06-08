@@ -4,10 +4,13 @@ import { motion } from "framer-motion";
 import { Flame, Sparkles, Zap, ArrowRight, BookOpen, Clock, TrendingUp, Plus } from "lucide-react";
 import { api } from "../api";
 import { useAuth } from "../AuthContext";
+import { usePaywall } from "../PaywallContext";
+import { canStartSession } from "../planGate";
 import NpsModal from "../components/NpsModal";
 
 export default function HomeScreen() {
   const { user } = useAuth();
+  const { open: openPaywall } = usePaywall();
   const [data, setData] = useState(null);
   const [npsOpen, setNpsOpen] = useState(false);
   const navigate = useNavigate();
@@ -20,6 +23,15 @@ export default function HomeScreen() {
     }, 900);
     return () => clearTimeout(t);
   }, []);
+
+  const startFiveMin = async () => {
+    const g = await canStartSession();
+    if (!g.allowed) {
+      openPaywall(g.motivo);
+      return;
+    }
+    navigate("/app/quiz/5min");
+  };
 
   const firstName = (user?.name || "").split(" ")[0] || "Aluno";
   const greeting = (() => {
@@ -47,7 +59,7 @@ export default function HomeScreen() {
       {/* 5 min hero card */}
       <motion.button
         whileTap={{ scale: 0.98 }}
-        onClick={() => navigate("/app/quiz/5min")}
+        onClick={startFiveMin}
         data-testid="hero-5min"
         className="w-full text-left relative overflow-hidden rounded-3xl p-6 bg-gradient-to-br from-[#1A1D27] to-[#12141D] border border-[#F5A623]/25 hero-glow"
       >

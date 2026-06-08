@@ -1,14 +1,17 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowLeft, Plus, FileText, Link as LinkIcon, FileUp, Camera, BookOpen, Layers, Sparkles, X, Loader2, Trash2 } from "lucide-react";
+import { ArrowLeft, Plus, FileText, Link as LinkIcon, FileUp, Camera, BookOpen, Layers, Sparkles, X, Loader2, Trash2, Lock } from "lucide-react";
 import { api } from "../api";
+import { useAuth } from "../AuthContext";
+import { usePaywall } from "../PaywallContext";
 
 const TIPO_ICON = { texto: FileText, link: LinkIcon, pdf: FileUp, foto: Camera };
 
 export default function MateriaDetailScreen() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { open: openPaywall } = usePaywall();
   const [materia, setMateria] = useState(null);
   const [fontes, setFontes] = useState([]);
   const [open, setOpen] = useState(false);
@@ -26,6 +29,13 @@ export default function MateriaDetailScreen() {
     if (!window.confirm("Remover essa fonte e seu conteúdo gerado?")) return;
     await api.delete(`/fontes/${fonte_id}`);
     load();
+  };
+
+  const startQuiz = async () => {
+    const { canStartSession } = await import("../planGate");
+    const g = await canStartSession();
+    if (!g.allowed) { openPaywall(g.motivo); return; }
+    navigate(`/app/quiz/materia/${id}`);
   };
 
   if (!materia) return <div className="px-5 pt-10 text-slate-400">Carregando…</div>;
@@ -53,7 +63,7 @@ export default function MateriaDetailScreen() {
         <div className="grid grid-cols-2 gap-3 mt-5">
           <button
             disabled={totalQ === 0}
-            onClick={() => navigate(`/app/quiz/materia/${id}`)}
+            onClick={startQuiz}
             className="sl-card p-4 text-left active:scale-95 transition disabled:opacity-40"
             data-testid="start-quiz"
           >
@@ -122,6 +132,9 @@ export default function MateriaDetailScreen() {
 }
 
 function AddContentSheet({ open, onClose, materiaId, onCreated }) {
+  const { user } = useAuth();
+  const { open: openPaywall } = usePaywall();
+  const isPro = user?.plano === "pro";
   const [tipo, setTipo] = useState(null);
   const [titulo, setTitulo] = useState("");
   const [conteudo, setConteudo] = useState("");
@@ -132,6 +145,15 @@ function AddContentSheet({ open, onClose, materiaId, onCreated }) {
 
   const reset = () => { setTipo(null); setTitulo(""); setConteudo(""); setUrl(""); setFile(null); setErr(null); };
   const close = () => { reset(); onClose(); };
+
+  const pickTipo = (v) => {
+    if (!isPro && (v === "pdf" || v === "foto")) {
+      onClose();
+      openPaywall("foto_pdf");
+      return;
+    }
+    setTipo(v);
+  };
 
   const submit = async (e) => {
     e?.preventDefault?.();
@@ -152,17 +174,24 @@ function AddContentSheet({ open, onClose, materiaId, onCreated }) {
       onCreated();
       close();
     } catch (ex) {
-      setErr(ex?.response?.data?.detail || "Erro ao gerar conteúdo");
+      const status = ex?.response?.status;
+      const detail = ex?.response?.data?.detail;
+      if (status === 402 && detail?.code === "free_limit") {
+        close();
+        openPaywall(detail.motivo);
+        return;
+      }
+      setErr(typeof detail === "string" ? detail : (detail?.motivo || "Erro ao gerar conteúdo"));
     } finally {
       setLoading(false);
     }
   };
 
   const tipos = [
-    { v: "texto", icon: FileText, label: "Texto", desc: "Cole conteúdo" },
-    { v: "link", icon: LinkIcon, label: "Link", desc: "URL de site" },
-    { v: "pdf", icon: FileUp, label: "PDF", desc: "Upload arquivo" },
-    { v: "foto", icon: Camera, label: "Foto", desc: "Página de livro" },
+    { v: "texto", icon: FileText, label: "Texto", desc: "Cole conteúdo", pro: false },
+    { v: "link", icon: LinkIcon, label: "Link", desc: "URL de site", pro: false },
+    { v: "pdf", icon: FileUp, label: "PDF", desc: "Upload arquivo", pro: true },
+    { v: "foto", icon: Camera, label: "Foto", desc: "Página de livro", pro: true },
   ];
 
   return (
@@ -186,11 +215,15 @@ function AddContentSheet({ open, onClose, materiaId, onCreated }) {
               <div className="grid grid-cols-2 gap-2.5">
                 {tipos.map((t) => {
                   const Icon = t.icon;
+                  const locked = t.pro && !isPro;
                   return (
-                    <button key={t.v} onClick={() => setTipo(t.v)} className="sl-card p-3 text-left active:scale-95 transition" data-testid={`tipo-${t.v}`}>
+                    <button key={t.v} onClick={() => pickTipo(t.v)} className="sl-card p-3 text-left active:scale-95 transition relative" data-testid={`tipo-${t.v}`}>
                       <div className="w-9 h-9 rounded-lg bg-[#F5A623]/15 text-[#F5A623] flex items-center justify-center mb-2"><Icon size={18} /></div>
-                      <p className="font-semibold text-sm">{t.label}</p>
-                      <p className="text-[11px] text-slate-400 mt-0.5">{t.desc}</p>
+                      <p className="font-semibold text-sm flex items-center gap-1.5">
+                        {t.label}
+                        {locked && <Lock size={11} className="text-[#F5A623]" data-testid={`lock-${t.v}`} />}
+                      </p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">{locked ? "Apenas no Pro" : t.desc}</p>
                     </button>
                   );
                 })}

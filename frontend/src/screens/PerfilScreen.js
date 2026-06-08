@@ -4,11 +4,12 @@ import { motion } from "framer-motion";
 import { Flame, Target, Clock, Award, LogOut, Crown, ChevronRight, Trophy, Zap, BookCheck } from "lucide-react";
 import { api } from "../api";
 import { useAuth } from "../AuthContext";
+import { usePaywall } from "../PaywallContext";
 
 export default function PerfilScreen() {
   const { user, logout } = useAuth();
+  const { open: openPaywall } = usePaywall();
   const [stats, setStats] = useState(null);
-  const [showPaywall, setShowPaywall] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => { api.get("/stats").then(r => setStats(r.data)); }, []);
@@ -121,7 +122,7 @@ export default function PerfilScreen() {
       {user?.plano !== "pro" && (
         <motion.button
           whileTap={{ scale: 0.98 }}
-          onClick={() => setShowPaywall(true)}
+          onClick={() => openPaywall("manual")}
           data-testid="upgrade-pro"
           className="w-full text-left relative overflow-hidden rounded-2xl p-5 mb-5 bg-gradient-to-br from-[#1A1D27] to-[#12141D] border border-[#F5A623]/30"
         >
@@ -142,54 +143,6 @@ export default function PerfilScreen() {
         <div className="w-10 h-10 rounded-xl bg-[#FF6B6B]/15 text-[#FF6B6B] flex items-center justify-center"><LogOut size={18} /></div>
         <span className="font-medium">Sair</span>
       </button>
-
-      {/* Paywall modal */}
-      {showPaywall && <PaywallModal onClose={() => setShowPaywall(false)} />}
     </div>
-  );
-}
-
-function PaywallModal({ onClose }) {
-  const benefits = [
-    "Ingestão ilimitada de conteúdo",
-    "Geração ilimitada de questões e flashcards",
-    "Todos os modos de prática",
-    "Plano de estudos com IA",
-    "Modo offline completo",
-    "Sem propaganda",
-  ];
-  return (
-    <>
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={onClose} className="fixed inset-0 bg-black/80 z-[55]" />
-      <motion.div
-        initial={{ y: "100%" }} animate={{ y: 0 }} transition={{ type: "spring", damping: 30 }}
-        className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md bg-[#12141D] rounded-t-3xl z-[60] p-6 border-t border-[#F5A623]/30"
-        data-testid="paywall-modal"
-      >
-        <div className="w-10 h-1 bg-[#262A36] rounded-full mx-auto mb-5" />
-        <div className="w-14 h-14 mx-auto rounded-2xl bg-gradient-to-br from-[#F5A623] to-[#FF7B00] flex items-center justify-center mb-4 shadow-[0_0_30px_rgba(245,166,35,0.4)]">
-          <Crown size={26} className="text-[#090A0F]" />
-        </div>
-        <h2 className="text-2xl font-bold heading text-center">StudyLoop Pro</h2>
-        <p className="text-center text-slate-400 text-sm mt-1">Tudo, ilimitado.</p>
-
-        <div className="my-5 text-center">
-          <span className="text-4xl font-bold heading">R$ 29</span>
-          <span className="text-slate-400">/mês</span>
-        </div>
-
-        <ul className="space-y-2.5 mb-6">
-          {benefits.map((b, i) => (
-            <li key={i} className="flex items-center gap-3 text-sm">
-              <div className="w-5 h-5 rounded-full bg-[#4ADE80]/20 text-[#4ADE80] flex items-center justify-center text-xs">✓</div>
-              {b}
-            </li>
-          ))}
-        </ul>
-
-        <button className="sl-btn-primary" onClick={onClose} data-testid="paywall-cta">Em breve disponível</button>
-        <button onClick={onClose} className="block w-full mt-3 text-sm text-slate-400" data-testid="paywall-close">Continuar no plano gratuito</button>
-      </motion.div>
-    </>
   );
 }
