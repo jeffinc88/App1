@@ -3,11 +3,16 @@ import { useNavigate, useParams } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { ArrowLeft, Check, X, ChevronRight, Trophy, Sparkles, Loader2 } from "lucide-react";
 import { api } from "../api";
+import { useAuth } from "../AuthContext";
+import ShareButton from "../components/ShareButton";
 
 export default function QuizScreen() {
   const { mode, id } = useParams(); // mode = "5min" | "materia"
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [questions, setQuestions] = useState([]);
+  const [materiaName, setMateriaName] = useState("");
+  const [streak, setStreak] = useState(0);
   const [idx, setIdx] = useState(0);
   const [selected, setSelected] = useState(null);
   const [confirmed, setConfirmed] = useState(false);
@@ -24,6 +29,20 @@ export default function QuizScreen() {
         if (mode === "5min") r = await api.get("/questoes/5min");
         else r = await api.get("/questoes", { params: { materia_id: id, limit: 10 } });
         setQuestions(r.data);
+        // also load materia name + current streak for share card
+        if (mode === "materia" && id) {
+          try {
+            const ms = await api.get("/materias");
+            const m = ms.data.find((x) => x.materia_id === id);
+            if (m) setMateriaName(m.nome);
+          } catch (_e) { /* noop */ }
+        } else {
+          setMateriaName("Modo 5 minutos");
+        }
+        try {
+          const s = await api.get("/stats");
+          setStreak(s.data?.streak_atual || 0);
+        } catch (_e) { /* noop */ }
       } finally { setLoading(false); }
     };
     load();
@@ -87,6 +106,15 @@ export default function QuizScreen() {
         <h2 className="text-3xl font-bold heading">Sessão completa!</h2>
         <p className="text-slate-400 mt-2 mb-8">Você acertou <span className="text-[#F5A623] font-bold">{correctCount} de {questions.length}</span> ({pct}%)</p>
         <button onClick={() => navigate("/app")} className="sl-btn-primary" data-testid="quiz-finish">Continuar</button>
+        <ShareButton
+          tipo="quiz"
+          title="Sessão completa!"
+          materia={materiaName}
+          acertos={correctCount}
+          total={questions.length}
+          streak={streak}
+          username={user?.name}
+        />
         <button onClick={() => window.location.reload()} className="sl-btn-ghost mt-3" data-testid="quiz-again">Praticar novamente</button>
       </div>
     );

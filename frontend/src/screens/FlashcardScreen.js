@@ -3,6 +3,8 @@ import { useNavigate, useParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { ArrowLeft, Trophy, Loader2, Sparkles } from "lucide-react";
 import { api } from "../api";
+import { useAuth } from "../AuthContext";
+import ShareButton from "../components/ShareButton";
 
 const RATINGS = [
   { v: 0, label: "Errei", color: "#FF6B6B" },
@@ -14,7 +16,10 @@ const RATINGS = [
 export default function FlashcardScreen() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [cards, setCards] = useState([]);
+  const [materiaName, setMateriaName] = useState("");
+  const [streak, setStreak] = useState(0);
   const [idx, setIdx] = useState(0);
   const [flipped, setFlipped] = useState(false);
   const [done, setDone] = useState(false);
@@ -24,6 +29,11 @@ export default function FlashcardScreen() {
 
   useEffect(() => {
     api.get(`/flashcards/due/${id}`).then((r) => setCards(r.data)).finally(() => setLoading(false));
+    api.get("/materias").then((r) => {
+      const m = r.data.find((x) => x.materia_id === id);
+      if (m) setMateriaName(m.nome);
+    }).catch(() => {});
+    api.get("/stats").then((r) => setStreak(r.data?.streak_atual || 0)).catch(() => {});
   }, [id]);
 
   if (loading) return <div className="px-5 pt-20 text-center text-slate-400"><Loader2 className="mx-auto animate-spin" /></div>;
@@ -67,6 +77,15 @@ export default function FlashcardScreen() {
         <h2 className="text-3xl font-bold heading">Sessão concluída!</h2>
         <p className="text-slate-400 mt-2 mb-8">{reviewed} flashcards revisados</p>
         <button onClick={() => navigate(-1)} className="sl-btn-primary" data-testid="fc-finish">Voltar</button>
+        <ShareButton
+          tipo="flashcard"
+          title="Flashcards revisados"
+          materia={materiaName}
+          acertos={reviewed}
+          total={reviewed}
+          streak={streak}
+          username={user?.name}
+        />
       </div>
     );
   }

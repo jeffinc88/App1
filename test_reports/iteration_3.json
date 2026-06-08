@@ -1,0 +1,55 @@
+{
+  "summary": "Iteration 3 — Frontend share-feature validation. Both Quiz and Flashcard 'Compartilhar resultado' flows VALIDATED end-to-end on 414x896 mobile viewport. Generated PNGs at /tmp/share_quiz.png (1.07MB) and /tmp/share_flashcard.png (1.82MB) — BOTH exactly 1080x1920 RGBA, valid PNG signature, non-blank (sampled pixels confirm gradient bg + content rendered). The Web Share API fallback (createObjectURL + <a download>) works correctly in headless Chromium. Button state machine idle → loading (Gerando imagem...) → done (Pronto!) → idle confirmed via text-content polling. Filenames follow pattern studyloop-{quiz|flashcard}-{ts}.png. Backend untouched per request; pytest skipped.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "AddContentSheet tipo-grid horizontal layout on 414x896",
+        "issue": "After compacting (p-3 + gap-2.5) the sheet panel still appears horizontally shifted/overflowing in headless capture — bounding boxes captured: tipo-texto x=231 (left card) and tipo-link x=419 (right card) on a 414-px wide viewport, meaning the right column is OFF the right edge of the viewport (419+178=597 > 414). The sheet class is `fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md`, expected to center within viewport, but it lays out wider than viewport. tipo-pdf and tipo-foto rows are below 896 fold (y=825, h=108.5 → bottom 933) so user must scroll inside the sheet. Functionally both tipo-texto and tipo-link were force-clickable, but visually the right column is cropped on real mobile.",
+        "affected_selectors": ["[data-testid=\"add-content-sheet\"]", "[data-testid=\"tipo-link\"]", "[data-testid=\"tipo-foto\"]"]
+      },
+      {
+        "flow": "QuizScreen quiz-next button on LAST question (Finalizar)",
+        "issue": "When Playwright invokes click(force=True) on quiz-next at the final question, the click is intercepted by the bottom-nav (tab-social) instead of triggering setDone(true). Reproduced on first 2 runs of the test. Workaround used: page.evaluate(\"document.querySelector('[data-testid=quiz-next]').click()\") which fires the event directly. Likely root cause: the sl-btn-primary at the page bottom plus a sub-button (Compartilhar/Praticar novamente in done state) and the global bottom-nav (z-50) overlap in viewport when quiz-next is below the fold and force=True skips scroll-into-view. Same family of z-index/overlap bugs reported in iteration_2 for MateriasScreen, only that PR raised z-[60] on bottom-sheets but didn't address the QuizScreen Finalizar button. Real user impact: probably tap-to-scroll prevents this, but worth verifying that quiz-next is always visible above bottom-nav on small viewports.",
+        "affected_selectors": ["[data-testid=\"quiz-next\"]", "[data-testid=\"bottom-nav\"]"]
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "MateriaDetailScreen AddContentSheet (mobile 414x896)",
+        "issues": [
+          "Panel positions outside expected centered layout — appears shifted right; tipo-link card sits at x=419+ off the right viewport edge.",
+          "Second row (pdf/foto) still falls below the 896 viewport fold even after p-3 compaction — internal scroll required."
+        ]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/test_reports/iteration_3.json"
+  ],
+  "share_artifacts": [
+    "/tmp/share_quiz.png (1080x1920, 1115960 B, valid PNG, amber ring variant)",
+    "/tmp/share_flashcard.png (1080x1920, 1907325 B, valid PNG, blue/purple ring variant)"
+  ],
+  "action_items": [
+    "INVESTIGATE: AddContentSheet on 414x896 mobile — panel positioning math seems off; tipo-link card lands outside viewport. Consider replacing `left-1/2 -translate-x-1/2 w-full max-w-md` with `inset-x-0 mx-auto w-full max-w-md` or removing max-w-md on mobile.",
+    "VERIFY: QuizScreen quiz-next button on final question — when bottom-nav is z-50 and the button sits near it, ensure 'Finalizar' is reliably tappable above the nav. Consider adding pb-24 to the quiz container or raising z of the action button.",
+    "OPTIONAL: Add visual snapshot/golden-image test for shareCard (1080x1920) so future tweaks to canvas drawing don't silently break the layout."
+  ],
+  "critical_code_review_comments": [
+    "shareCard.js: solid native canvas implementation, no dependencies, handles tipo='quiz' vs 'flashcard' variants (amber vs blue/purple ring), wraps long materia/title, has logo + pill + score circle + streak strip + footer CTA — generated 1080x1920 PNG ranges 1-2 MB depending on content, which is fine for share but heavy for direct upload; consider canvas.toBlob(cb, 'image/png') quality param is ignored by browsers for PNG (already at 0.95 which is no-op).",
+    "ShareButton.js: state machine clean. Catches errors silently and resets to idle, which is good UX but swallows real failures — recommend logging to console.error for debuggability.",
+    "QuizScreen.js: line 90 — `acertos: correctCount + (isCorrect && confirmed ? 0 : 0)` is a no-op expression (always +0). Either intentional placeholder or dead code, should be cleaned up.",
+    "QuizScreen.js: ShareButton renders below quiz-finish (Continuar) which matches the requirement, but the share button uses `sl-btn-ghost mt-3` while quiz-again also uses same class — visual hierarchy OK.",
+    "FlashcardScreen.js: ShareButton renders below fc-finish (Voltar) — matches QuizScreen pattern. acertos==total==reviewed for flashcards, so shareCard renders the count correctly via tipo='flashcard' branch."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped per request)", "frontend": "100% share-feature passes; 2 secondary integration concerns flagged on AddContentSheet layout + quiz-next overlap"},
+  "test_credentials": "demo@studyloop.app / senha123 (seeded with 1 materia 'Biologia Share Test' + 1 texto fonte 'Fotossíntese' → 5 questoes + 6 flashcards generated by Claude Sonnet 4.5).",
+  "seed_data_creation": "Reused demo user; via curl created materia mat_9afa3b3b0234 + fonte fonte_b84dc302b5e2 (texto) which triggered AI generation. After tests, demo user has 5 questoes available via /api/questoes/5min and 6 flashcards due. Total 5 sessoes posted (one per quiz completion attempt during testing).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Share feature works perfectly on both quiz and flashcard. PNG artifacts in /tmp/share_quiz.png and /tmp/share_flashcard.png. Demo user pre-seeded with materia + fonte + questoes/flashcards ready. To reproduce: login as demo → click hero-5min OR navigate to /app/flashcards/mat_9afa3b3b0234 → complete session → click [data-testid='share-result'] → expect_download captures PNG. Use page.evaluate(...click()) on the final quiz-next button instead of click(force=True) to avoid bottom-nav overlap. Disable bottom-nav pointer-events via JS to avoid layout interference: document.querySelectorAll('nav').forEach(n=>n.style.pointerEvents='none').",
+  "rca of the issue": "No core bug — feature works. Two minor layout concerns: (1) AddContentSheet horizontal overflow on 414px viewport — panel renders ~600px wide instead of ≤414px (max-w-md=448 + w-full conflict, possibly a parent transform), causing tipo-link/foto to clip off right edge; (2) QuizScreen quiz-next button on the last question — when force=True click is used (skipping scroll-into-view), the bottom-nav at z-50 intercepts the click and navigates to /app/social. Real-user tap should auto-scroll the button into view, so this is mostly a test-harness artifact, but it does suggest the action button could be safer with pb-24 spacing or higher z-index."
+}
