@@ -107,6 +107,14 @@ class FlashcardReview(BaseModel):
     grade: int  # 0=Errei, 1=Difícil, 2=Bom, 3=Fácil
 
 
+class AvaliacaoIn(BaseModel):
+    nota: int  # 1..5
+    materia_id: Optional[str] = None
+    fonte_id: Optional[str] = None
+    sessao_id: Optional[str] = None
+    comentario: Optional[str] = None
+
+
 # ---------- Auth helpers ----------
 def hash_pw(p: str) -> str:
     return bcrypt.hashpw(p.encode(), bcrypt.gensalt()).decode()
@@ -705,6 +713,25 @@ async def save_sessao(body: SessaoCreate, user: dict = Depends(current_user)):
     )
     sess.pop("_id", None)
     return sess
+
+
+@api.post("/avaliacoes")
+async def save_avaliacao(body: AvaliacaoIn, user: dict = Depends(current_user)):
+    if not (1 <= body.nota <= 5):
+        raise HTTPException(400, "Nota deve ser entre 1 e 5")
+    doc = {
+        "avaliacao_id": new_id("av"),
+        "user_id": user["user_id"],
+        "nota": body.nota,
+        "materia_id": body.materia_id,
+        "fonte_id": body.fonte_id,
+        "sessao_id": body.sessao_id,
+        "comentario": (body.comentario or "")[:500],
+        "created_at": now_utc().isoformat(),
+    }
+    await db.avaliacoes.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
 
 
 @api.get("/stats")

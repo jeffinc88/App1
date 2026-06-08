@@ -189,6 +189,45 @@ class TestLinkSource:
         assert d["total_questoes"] > 0
 
 
+# --- AVALIACOES (rating endpoint) ---
+class TestAvaliacoes:
+    def test_create_avaliacao_valid(self, auth_headers):
+        r = requests.post(f"{API}/avaliacoes", headers=auth_headers,
+                          json={"nota": 4, "materia_id": "mat_dummy", "sessao_id": "sess_dummy"}, timeout=15)
+        assert r.status_code == 200, f"avaliacao create failed: {r.status_code} {r.text}"
+        d = r.json()
+        assert "avaliacao_id" in d
+        assert d["nota"] == 4
+        assert d["materia_id"] == "mat_dummy"
+        assert d["sessao_id"] == "sess_dummy"
+        assert "user_id" in d
+        assert "created_at" in d
+
+    def test_create_avaliacao_minimal(self, auth_headers):
+        r = requests.post(f"{API}/avaliacoes", headers=auth_headers,
+                          json={"nota": 5}, timeout=15)
+        assert r.status_code == 200
+        d = r.json()
+        assert d["nota"] == 5
+        assert d["materia_id"] is None
+        assert d["sessao_id"] is None
+
+    def test_create_avaliacao_invalid_low(self, auth_headers):
+        r = requests.post(f"{API}/avaliacoes", headers=auth_headers,
+                          json={"nota": 0}, timeout=15)
+        assert r.status_code == 400
+
+    def test_create_avaliacao_invalid_high(self, auth_headers):
+        r = requests.post(f"{API}/avaliacoes", headers=auth_headers,
+                          json={"nota": 6}, timeout=15)
+        assert r.status_code == 400
+
+    def test_create_avaliacao_requires_auth(self):
+        r = requests.post(f"{API}/avaliacoes", json={"nota": 3}, timeout=15)
+        assert r.status_code == 401
+
+
+
 # --- DELETE materia cascades ---
 class TestCleanup:
     def test_delete_materia(self, auth_headers):

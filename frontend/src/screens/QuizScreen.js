@@ -20,6 +20,10 @@ export default function QuizScreen() {
   const [loading, setLoading] = useState(true);
   const [done, setDone] = useState(false);
   const [shake, setShake] = useState(false);
+  const [rating, setRating] = useState(false); // intermediate step
+  const [stars, setStars] = useState(0);
+  const [submittingRating, setSubmittingRating] = useState(false);
+  const [sessaoId, setSessaoId] = useState(null);
   const startRef = useRef(Date.now());
 
   useEffect(() => {
@@ -83,17 +87,89 @@ export default function QuizScreen() {
     } else {
       const duration = Math.round((Date.now() - startRef.current) / 1000);
       try {
-        await api.post("/sessoes", {
+        const r = await api.post("/sessoes", {
           materia_id: mode === "materia" ? id : null,
           tipo: mode === "5min" ? "5min" : "quiz",
           total_questoes: questions.length,
-          acertos: correctCount + (isCorrect && confirmed ? 0 : 0), // already counted above
+          acertos: correctCount,
           duracao_segundos: duration,
         });
-      } catch {}
-      setDone(true);
+        setSessaoId(r.data?.sessao_id || null);
+      } catch (_e) { /* noop */ }
+      setRating(true);
     }
   };
+
+  const submitRating = async () => {
+    if (stars < 1) return;
+    setSubmittingRating(true);
+    try {
+      await api.post("/avaliacoes", {
+        nota: stars,
+        materia_id: mode === "materia" ? id : null,
+        sessao_id: sessaoId,
+      });
+    } catch (_e) { /* noop */ }
+    setSubmittingRating(false);
+    setRating(false);
+    setDone(true);
+  };
+
+  const skipRating = () => {
+    setRating(false);
+    setDone(true);
+  };
+
+  if (rating) {
+    return (
+      <div className="px-6 pt-16 pb-10 min-h-[100dvh] flex flex-col" data-testid="quiz-rating">
+        <motion.div
+          initial={{ scale: 0.6, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+          transition={{ type: "spring", damping: 14 }}
+          className="text-7xl text-center mb-6 select-none"
+        >🤔</motion.div>
+        <h2 className="text-2xl font-bold heading text-center leading-tight">As questões foram boas?</h2>
+        <p className="text-slate-400 text-center text-sm mt-2 leading-relaxed max-w-xs mx-auto">
+          Sua nota nos ajuda a melhorar a qualidade das questões geradas.
+        </p>
+
+        <div className="flex items-center justify-center gap-2 mt-10 mb-8" data-testid="rating-stars">
+          {[1, 2, 3, 4, 5].map((n) => {
+            const active = stars >= n;
+            return (
+              <motion.button
+                key={n}
+                whileTap={{ scale: 0.85 }}
+                onClick={() => setStars(n)}
+                aria-label={`${n} estrelas`}
+                data-testid={`star-${n}`}
+                className="p-1.5"
+              >
+                <svg width="44" height="44" viewBox="0 0 24 24" fill={active ? "#F5A623" : "none"} stroke={active ? "#F5A623" : "#3F4350"} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" style={{ filter: active ? "drop-shadow(0 0 10px rgba(245,166,35,0.55))" : "none", transition: "all .2s" }}>
+                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                </svg>
+              </motion.button>
+            );
+          })}
+        </div>
+
+        <div className="mt-auto">
+          <button
+            onClick={submitRating}
+            disabled={stars < 1 || submittingRating}
+            className="sl-btn-primary flex items-center justify-center gap-2"
+            data-testid="rating-submit"
+          >
+            {submittingRating && <Loader2 size={18} className="animate-spin" />}
+            {submittingRating ? "Enviando..." : "Enviar avaliação"}
+          </button>
+          <button onClick={skipRating} className="block mx-auto mt-4 text-sm text-slate-400 underline-offset-2 hover:text-slate-200" data-testid="rating-skip">
+            Pular
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (done) {
     const pct = Math.round((correctCount / questions.length) * 100);
