@@ -1,18 +1,65 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { motion } from "framer-motion";
-import { Flame, Target, Clock, Award, LogOut, Crown, ChevronRight, Trophy, Zap, BookCheck } from "lucide-react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { motion, AnimatePresence } from "framer-motion";
+import { Flame, Target, Clock, Award, LogOut, Crown, ChevronRight, Trophy, Zap, BookCheck, Loader2, Check, X } from "lucide-react";
 import { api } from "../api";
 import { useAuth } from "../AuthContext";
 import { usePaywall } from "../PaywallContext";
 
 export default function PerfilScreen() {
-  const { user, logout } = useAuth();
+  const { user, logout, refresh } = useAuth();
   const { open: openPaywall } = usePaywall();
   const [stats, setStats] = useState(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [checkout, setCheckout] = useState(null); // {state: 'polling'|'success'|'cancelled'|'failed', message?}
   const navigate = useNavigate();
 
   useEffect(() => { api.get("/stats").then(r => setStats(r.data)); }, []);
+
+  // Detect return from Stripe Checkout
+  useEffect(() => {
+    const ck = searchParams.get("checkout");
+    const sessionId = searchParams.get("session_id");
+    if (!ck) return;
+
+    if (ck === "cancel") {
+      setCheckout({ state: "cancelled" });
+      const t = setTimeout(() => {
+        setSearchParams({}, { replace: true });
+        setCheckout(null);
+      }, 2500);
+      return () => clearTimeout(t);
+    }
+
+    if (ck === "success" && sessionId) {
+      let attempts = 0;
+      const max = 8;
+      setCheckout({ state: "polling" });
+      const poll = async () => {
+        attempts += 1;
+        try {
+          const { data } = await api.get(`/plan/checkout-status/${sessionId}`);
+          if (data.is_pro || data.payment_status === "paid") {
+            setCheckout({ state: "success" });
+            await refresh();
+            const t = setTimeout(() => {
+              setSearchParams({}, { replace: true });
+              setCheckout(null);
+            }, 1800);
+            return () => clearTimeout(t);
+          }
+          if (data.status === "expired" || data.payment_status === "unpaid" && attempts >= max) {
+            setCheckout({ state: "failed", message: "Pagamento não confirmado." });
+            return;
+          }
+        } catch (_e) { /* retry */ }
+        if (attempts < max) setTimeout(poll, 1800);
+        else setCheckout({ state: "failed", message: "Tempo esgotado ao confirmar pagamento." });
+      };
+      poll();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   const doLogout = async () => { await logout(); navigate("/", { replace: true }); };
 
@@ -45,6 +92,28 @@ export default function PerfilScreen() {
 
   return (
     <div className="px-5 pt-10 pb-6" data-testid="perfil-screen">
+      {/* Checkout return banner */}
+      <AnimatePresence>
+        {checkout && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
+            className={`mb-5 sl-card p-4 flex items-center gap-3 ${checkout.state === "success" ? "border-[#4ADE80]/40" : checkout.state === "failed" ? "border-[#FF6B6B]/40" : ""}`}
+            data-testid={`checkout-${checkout.state}`}
+          >
+            {checkout.state === "polling" && <Loader2 size={18} className="animate-spin text-[#F5A623]" />}
+            {checkout.state === "success" && <div className="w-7 h-7 rounded-full bg-[#4ADE80]/20 flex items-center justify-center"><Check size={14} className="text-[#4ADE80]" strokeWidth={3} /></div>}
+            {checkout.state === "cancelled" && <X size={18} className="text-slate-400" />}
+            {checkout.state === "failed" && <X size={18} className="text-[#FF6B6B]" />}
+            <div className="flex-1 text-sm">
+              {checkout.state === "polling" && "Confirmando seu pagamento..."}
+              {checkout.state === "success" && "🎉 Bem-vindo ao Pro! Tudo liberado."}
+              {checkout.state === "cancelled" && "Pagamento cancelado. Sem problema, você pode tentar de novo quando quiser."}
+              {checkout.state === "failed" && (checkout.message || "Não foi possível confirmar o pagamento.")}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Header */}
       <div className="flex items-center gap-4 mb-7">
         <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#F5A623] to-[#FF7B00] flex items-center justify-center text-[#090A0F] text-2xl font-bold heading shadow-[0_0_30px_rgba(245,166,35,0.3)]">

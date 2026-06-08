@@ -61,14 +61,24 @@ export default function PaywallModal({ open, motivo = null, onClose, onUpgraded 
     }).catch(() => {});
     setLoading(true);
     try {
-      const { data } = await api.post("/plan/upgrade");
-      setSuccess(true);
-      setTimeout(() => {
-        onUpgraded?.(data.user);
+      const { data } = await api.post("/plan/upgrade", {
+        origin_url: window.location.origin,
+      });
+      // If user is already Pro (e.g. via webhook before this click), close & refresh
+      if (data.already_pro) {
+        onUpgraded?.();
         onClose();
-      }, 1400);
+        return;
+      }
+      if (data.checkout_url) {
+        // Redirect to Stripe Checkout — Stripe will redirect back to /app/perfil?checkout=success&session_id=...
+        window.location.href = data.checkout_url;
+        return;
+      }
+      throw new Error("Resposta inválida do servidor");
     } catch (e) {
-      setError(e?.response?.data?.detail || "Não foi possível concluir o upgrade.");
+      const detail = e?.response?.data?.detail;
+      setError(typeof detail === "string" ? detail : (detail?.motivo || e.message || "Não foi possível iniciar o checkout."));
     } finally {
       setLoading(false);
     }

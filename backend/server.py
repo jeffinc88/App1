@@ -17,6 +17,7 @@ import jwt as pyjwt
 import requests as http_requests
 from bs4 import BeautifulSoup
 from pypdf import PdfReader
+import stripe
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
 
@@ -31,6 +32,12 @@ db = client[os.environ['DB_NAME']]
 EMERGENT_LLM_KEY = os.environ['EMERGENT_LLM_KEY']
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALG = "HS256"
+
+# Stripe — keys come from env. STRIPE_PRICE_ID is the recurring price you create in Stripe Dashboard.
+STRIPE_API_KEY = os.environ.get('STRIPE_API_KEY', '')
+STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET', '')
+STRIPE_PRICE_ID = os.environ.get('STRIPE_PRICE_ID', '')
+stripe.api_key = STRIPE_API_KEY
 
 app = FastAPI(title="StudyLoop API")
 api = APIRouter(prefix="/api")
@@ -389,26 +396,216 @@ async def _enforce_sessao_limit(user: dict, tipo: str):
 
 
 @api.post("/plan/upgrade")
-async def plan_upgrade(user: dict = Depends(current_user)):
-    """MOCKED upgrade — sets plano=pro and records a payment. Replace with Stripe later."""
+async def plan_upgrade(request: Request, user: dict = Depends(current_user)):
+    """Creates a Stripe Checkout Session in subscription mode and returns the URL.
+    Frontend redirects the user to session.url. Once payment is confirmed by the
+    webhook (checkout.session.completed), user.plano is updated to 'pro'.
+    """
     if user.get("plano") == "pro":
         return {"ok": True, "already_pro": True}
-    payment_id = new_id("pay")
-    await db.payments.insert_one({
-        "payment_id": payment_id,
+
+    if not STRIPE_API_KEY:
+        raise HTTPException(500, "Stripe não configurado (STRIPE_API_KEY ausente)")
+    if not STRIPE_PRICE_ID:
+        raise HTTPException(500, "Stripe não configurado (STRIPE_PRICE_ID ausente — crie um Price recorrente em BRL na Stripe Dashboard)")
+
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    origin_url = (body.get("origin_url") or request.headers.get("origin") or "").rstrip("/")
+    if not origin_url:
+        raise HTTPException(400, "origin_url obrigatório")
+
+    success_url = f"{origin_url}/app/perfil?checkout=success&session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url = f"{origin_url}/app/perfil?checkout=cancel"
+
+    # Reuse Stripe Customer if we already have one
+    customer_id = user.get("stripe_customer_id")
+    try:
+        if not customer_id:
+            customer = stripe.Customer.create(
+                email=user["email"],
+                name=user.get("name") or user["email"],
+                metadata={"user_id": user["user_id"]},
+            )
+            customer_id = customer.id
+            await db.users.update_one(
+                {"user_id": user["user_id"]},
+                {"$set": {"stripe_customer_id": customer_id}},
+            )
+
+        session = stripe.checkout.Session.create(
+            mode="subscription",
+            customer=customer_id,
+            line_items=[{"price": STRIPE_PRICE_ID, "quantity": 1}],
+            success_url=success_url,
+            cancel_url=cancel_url,
+            allow_promotion_codes=True,
+            client_reference_id=user["user_id"],
+            subscription_data={"metadata": {"user_id": user["user_id"]}},
+            metadata={"user_id": user["user_id"], "purpose": "studyloop_pro_subscription"},
+        )
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe error: {e}")
+        raise HTTPException(502, f"Erro Stripe: {getattr(e, 'user_message', None) or str(e)}")
+
+    # Pending transaction record
+    await db.payment_transactions.insert_one({
+        "transaction_id": new_id("pt"),
         "user_id": user["user_id"],
-        "amount": PRO_PRICE_BRL,
-        "currency": "BRL",
-        "status": "success",
-        "method": "mock",
+        "stripe_session_id": session.id,
+        "stripe_customer_id": customer_id,
+        "amount": 29.0,
+        "currency": "brl",
+        "status": "initiated",
+        "mode": "subscription",
         "created_at": now_utc().isoformat(),
     })
-    await db.users.update_one(
-        {"user_id": user["user_id"]},
-        {"$set": {"plano": "pro", "pro_since": now_utc().isoformat()}},
+
+    return {"ok": True, "checkout_url": session.url, "session_id": session.id}
+
+
+@api.get("/plan/checkout-status/{session_id}")
+async def plan_checkout_status(session_id: str, user: dict = Depends(current_user)):
+    """Frontend polls this after returning from Stripe. We re-fetch the session and
+    persist/update the transaction so the UI can confirm immediately even before the
+    webhook fires (the webhook is still the source of truth for activating the plan)."""
+    if not STRIPE_API_KEY:
+        raise HTTPException(500, "Stripe não configurado")
+    try:
+        session = stripe.checkout.Session.retrieve(session_id, expand=["subscription"])
+    except stripe.error.StripeError as e:
+        raise HTTPException(404, f"Sessão não encontrada: {e}")
+
+    if session.get("client_reference_id") != user["user_id"]:
+        raise HTTPException(403, "Sessão não pertence a este usuário")
+
+    payment_status = session.get("payment_status")  # 'paid' | 'unpaid' | 'no_payment_required'
+    status = session.get("status")  # 'open' | 'complete' | 'expired'
+    sub = session.get("subscription")
+    sub_id = sub.id if hasattr(sub, "id") else (sub.get("id") if isinstance(sub, dict) else sub)
+
+    # Idempotent transaction update
+    await db.payment_transactions.update_one(
+        {"stripe_session_id": session_id},
+        {"$set": {
+            "status": "completed" if payment_status == "paid" else status or payment_status or "pending",
+            "payment_status": payment_status,
+            "stripe_subscription_id": sub_id,
+            "updated_at": now_utc().isoformat(),
+        }},
     )
+
+    # Activate Pro idempotently (webhook does same thing — whichever fires first wins)
+    if payment_status == "paid" and user.get("plano") != "pro":
+        await db.users.update_one(
+            {"user_id": user["user_id"]},
+            {"$set": {
+                "plano": "pro",
+                "pro_since": now_utc().isoformat(),
+                "stripe_subscription_id": sub_id,
+            }},
+        )
+
     fresh = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0, "password_hash": 0})
-    return {"ok": True, "user": fresh, "payment_id": payment_id, "amount": PRO_PRICE_BRL}
+    return {
+        "payment_status": payment_status,
+        "status": status,
+        "is_pro": fresh.get("plano") == "pro",
+        "user": fresh,
+    }
+
+
+@app.post("/api/webhook/stripe")
+async def stripe_webhook(request: Request):
+    """Stripe webhook — source of truth for subscription lifecycle.
+    Handles: checkout.session.completed, customer.subscription.deleted,
+    invoice.payment_failed, customer.subscription.updated."""
+    payload = await request.body()
+    sig_header = request.headers.get("Stripe-Signature", "")
+
+    if STRIPE_WEBHOOK_SECRET:
+        try:
+            event = stripe.Webhook.construct_event(payload, sig_header, STRIPE_WEBHOOK_SECRET)
+        except (ValueError, stripe.error.SignatureVerificationError) as e:
+            logger.warning(f"Webhook signature verification failed: {e}")
+            raise HTTPException(status_code=400, detail="Assinatura inválida")
+    else:
+        # No secret configured (dev only) — accept payload without verification
+        try:
+            event = stripe.Event.construct_from(json.loads(payload), stripe.api_key)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Payload inválido: {e}")
+
+    etype = event["type"]
+    data = event["data"]["object"]
+    logger.info(f"Stripe webhook received: {etype} id={event.get('id')}")
+
+    # Idempotency log
+    await db.stripe_webhook_events.update_one(
+        {"event_id": event["id"]},
+        {"$setOnInsert": {
+            "event_id": event["id"],
+            "event_type": etype,
+            "received_at": now_utc().isoformat(),
+        }},
+        upsert=True,
+    )
+
+    if etype == "checkout.session.completed":
+        user_id = data.get("client_reference_id") or (data.get("metadata") or {}).get("user_id")
+        sub_id = data.get("subscription")
+        customer_id = data.get("customer")
+        if user_id and data.get("payment_status") == "paid":
+            await db.users.update_one(
+                {"user_id": user_id},
+                {"$set": {
+                    "plano": "pro",
+                    "pro_since": now_utc().isoformat(),
+                    "stripe_customer_id": customer_id,
+                    "stripe_subscription_id": sub_id,
+                }},
+            )
+            await db.payment_transactions.update_one(
+                {"stripe_session_id": data["id"]},
+                {"$set": {
+                    "status": "completed",
+                    "payment_status": "paid",
+                    "stripe_subscription_id": sub_id,
+                    "completed_at": now_utc().isoformat(),
+                }},
+            )
+
+    elif etype in ("customer.subscription.deleted", "customer.subscription.canceled"):
+        sub_id = data.get("id")
+        customer_id = data.get("customer")
+        await db.users.update_one(
+            {"$or": [{"stripe_subscription_id": sub_id}, {"stripe_customer_id": customer_id}]},
+            {"$set": {"plano": "free", "pro_since": None, "stripe_subscription_id": None}},
+        )
+
+    elif etype == "invoice.payment_failed":
+        sub_id = data.get("subscription")
+        customer_id = data.get("customer")
+        # Revert to free on payment failure
+        await db.users.update_one(
+            {"$or": [{"stripe_subscription_id": sub_id}, {"stripe_customer_id": customer_id}]},
+            {"$set": {"plano": "free", "pro_since": None}},
+        )
+
+    elif etype == "customer.subscription.updated":
+        sub_id = data.get("id")
+        status = data.get("status")  # active | past_due | canceled | unpaid | trialing | incomplete
+        if status in ("active", "trialing"):
+            await db.users.update_one(
+                {"stripe_subscription_id": sub_id},
+                {"$set": {"plano": "pro"}},
+            )
+        elif status in ("canceled", "unpaid", "incomplete_expired"):
+            await db.users.update_one(
+                {"stripe_subscription_id": sub_id},
+                {"$set": {"plano": "free", "stripe_subscription_id": None}},
+            )
+
+    return {"received": True}
 
 
 # ---------- ANALYTICS ----------
