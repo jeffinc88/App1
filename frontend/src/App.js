@@ -12,6 +12,7 @@ import QuizScreen from "./screens/QuizScreen";
 import FlashcardScreen from "./screens/FlashcardScreen";
 import SocialScreen from "./screens/SocialScreen";
 import PerfilScreen from "./screens/PerfilScreen";
+import AdminScreen from "./screens/AdminScreen";
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -46,6 +47,7 @@ function AppRouter() {
     <Routes>
       <Route path="/" element={<PublicRoute><LoginScreen /></PublicRoute>} />
       <Route path="/auth/callback" element={<AuthCallback />} />
+      <Route path="/admin" element={<ProtectedRoute><AdminScreen /></ProtectedRoute>} />
       <Route path="/onboarding" element={
         <ProtectedOnboardingRoute><OnboardingScreen /></ProtectedOnboardingRoute>
       } />

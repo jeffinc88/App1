@@ -138,6 +138,15 @@ export default function PerfilScreen() {
         </motion.button>
       )}
 
+      {/* Admin link — visible only to admin email */}
+      {(user?.email || "").toLowerCase() === "jeffinc88@gmail.com" && (
+        <button onClick={() => navigate("/admin")} className="w-full sl-card p-4 flex items-center gap-3 mb-3 active:scale-[0.98] transition border-[#F5A623]/30" data-testid="open-admin">
+          <div className="w-10 h-10 rounded-xl bg-[#F5A623]/15 text-[#F5A623] flex items-center justify-center"><ChevronRight size={18} /></div>
+          <span className="font-medium flex-1 text-left">Painel admin</span>
+          <span className="text-[10px] uppercase tracking-wider font-bold text-[#F5A623]">PRIVADO</span>
+        </button>
+      )}
+
       {/* Settings */}
       <button onClick={doLogout} className="w-full sl-card p-4 flex items-center gap-3 active:scale-[0.98] transition" data-testid="logout-btn">
         <div className="w-10 h-10 rounded-xl bg-[#FF6B6B]/15 text-[#FF6B6B] flex items-center justify-center"><LogOut size={18} /></div>

@@ -429,6 +429,124 @@ async def track_event(body: AnalyticsIn, user: dict = Depends(current_user)):
     return {"ok": True, "event_id": doc["event_id"]}
 
 
+# ---------- ADMIN ----------
+ADMIN_EMAIL = "jeffinc88@gmail.com"
+
+
+async def require_admin(user: dict = Depends(current_user)) -> dict:
+    if (user.get("email") or "").lower() != ADMIN_EMAIL.lower():
+        raise HTTPException(status_code=403, detail="Acesso restrito")
+    return user
+
+
+@api.get("/admin/metrics")
+async def admin_metrics(_: dict = Depends(require_admin)):
+    now = now_utc()
+    iso_7d = (now - timedelta(days=7)).isoformat()
+    iso_30d = (now - timedelta(days=30)).isoformat()
+
+    # Users
+    total_users = await db.users.count_documents({})
+    ativos_7d_ids = await db.sessoes.distinct("user_id", {"created_at": {"$gte": iso_7d}})
+    ativos_7d = len(ativos_7d_ids)
+
+    # Ativação D7: users created >=7 days ago, of whom how many did at least 1 sessao in first 7 days
+    cohort_d7 = await db.users.find({"created_at": {"$lte": iso_7d}}, {"user_id": 1, "created_at": 1, "_id": 0}).to_list(100000)
+    activated_d7 = 0
+    for u in cohort_d7:
+        c = u.get("created_at")
+        if not c:
+            continue
+        c_dt = datetime.fromisoformat(c) if isinstance(c, str) else c
+        if c_dt.tzinfo is None:
+            c_dt = c_dt.replace(tzinfo=timezone.utc)
+        end_dt = c_dt + timedelta(days=7)
+        s = await db.sessoes.find_one({
+            "user_id": u["user_id"],
+            "created_at": {"$gte": c_dt.isoformat(), "$lte": end_dt.isoformat()},
+        })
+        if s:
+            activated_d7 += 1
+    ativacao_d7_pct = round((activated_d7 / len(cohort_d7) * 100), 1) if cohort_d7 else 0.0
+
+    # Retenção D30: users registered >=30 days ago who had >=1 sessao in last 7 days
+    cohort_d30 = await db.users.count_documents({"created_at": {"$lte": iso_30d}})
+    if cohort_d30 > 0:
+        retained_ids = await db.sessoes.distinct("user_id", {"created_at": {"$gte": iso_7d}})
+        retained_d30 = await db.users.count_documents({
+            "user_id": {"$in": retained_ids},
+            "created_at": {"$lte": iso_30d},
+        })
+        retencao_d30_pct = round((retained_d30 / cohort_d30 * 100), 1)
+    else:
+        retained_d30 = 0
+        retencao_d30_pct = 0.0
+
+    # Avaliações IA (stars 1-5)
+    avals = await db.avaliacoes.find({}, {"nota": 1, "_id": 0}).to_list(100000)
+    total_avaliacoes = len(avals)
+    avaliacao_media = round(sum(a.get("nota", 0) for a in avals) / total_avaliacoes, 2) if total_avaliacoes else 0.0
+
+    # NPS
+    nps_recs = await db.nps_surveys.find({"status": "answered"}, {"nota": 1, "_id": 0}).to_list(100000)
+    total_nps = len(nps_recs)
+    promotores = sum(1 for r in nps_recs if r.get("nota", -1) >= 9)
+    detratores = sum(1 for r in nps_recs if 0 <= r.get("nota", -1) <= 6)
+    neutros = sum(1 for r in nps_recs if 7 <= r.get("nota", -1) <= 8)
+    if total_nps > 0:
+        nps_score = round((promotores / total_nps * 100) - (detratores / total_nps * 100), 1)
+    else:
+        nps_score = 0.0
+
+    # Monetização
+    pro_users = await db.users.find(
+        {"plano": "pro"},
+        {"_id": 0, "user_id": 1, "name": 1, "email": 1, "pro_since": 1, "created_at": 1, "picture": 1},
+    ).sort("pro_since", -1).to_list(1000)
+    total_pro = len(pro_users)
+    paywall_shown_count = await db.analytics_events.count_documents({"name": "paywall_shown"})
+    shown_user_ids = await db.analytics_events.distinct("user_id", {"name": "paywall_shown"})
+    tapped_user_ids = await db.analytics_events.distinct("user_id", {"name": "paywall_cta_tapped"})
+    unique_shown = len(shown_user_ids)
+    unique_tapped = len([u for u in tapped_user_ids if u in shown_user_ids])
+    paywall_ctr = round((unique_tapped / unique_shown * 100), 1) if unique_shown else 0.0
+
+    return {
+        "generated_at": now.isoformat(),
+        "users": {
+            "total": total_users,
+            "ativos_7d": ativos_7d,
+        },
+        "ativacao_retencao": {
+            "ativacao_d7_pct": ativacao_d7_pct,
+            "ativacao_d7_cohort": len(cohort_d7),
+            "ativacao_d7_activated": activated_d7,
+            "retencao_d30_pct": retencao_d30_pct,
+            "retencao_d30_cohort": cohort_d30,
+            "retencao_d30_retained": retained_d30,
+        },
+        "ia_qualidade": {
+            "media_estrelas": avaliacao_media,
+            "total_avaliacoes": total_avaliacoes,
+        },
+        "nps": {
+            "score": nps_score,
+            "total_respostas": total_nps,
+            "promotores": promotores,
+            "neutros": neutros,
+            "detratores": detratores,
+        },
+        "monetizacao": {
+            "total_pro": total_pro,
+            "paywall_shown_count": paywall_shown_count,
+            "paywall_unique_shown_users": unique_shown,
+            "paywall_unique_tapped_users": unique_tapped,
+            "paywall_ctr_pct": paywall_ctr,
+            "pro_users": pro_users,
+        },
+    }
+
+
 # ---------- MATERIAS ----------
 @api.post("/materias")
 async def create_materia(body: MateriaIn, user: dict = Depends(current_user)):
