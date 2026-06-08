@@ -1,73 +1,777 @@
-from fastapi import FastAPI, APIRouter
+"""
+StudyLoop Backend - FastAPI + MongoDB
+Active learning app with AI-generated quizzes & flashcards.
+"""
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, Form, Request, Response
+from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-import os
-import logging
+import os, logging, uuid, json, re, base64, io
 from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List
-import uuid
-from datetime import datetime, timezone
+from pydantic import BaseModel, Field, EmailStr
+from typing import List, Optional, Literal
+from datetime import datetime, timezone, timedelta
+import bcrypt
+import jwt as pyjwt
+import requests as http_requests
+from bs4 import BeautifulSoup
+from pypdf import PdfReader
 
+from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
 
+# ---------- Setup ----------
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-# Create the main app without a prefix
-app = FastAPI()
+EMERGENT_LLM_KEY = os.environ['EMERGENT_LLM_KEY']
+JWT_SECRET = os.environ['JWT_SECRET']
+JWT_ALG = "HS256"
 
-# Create a router with the /api prefix
-api_router = APIRouter(prefix="/api")
+app = FastAPI(title="StudyLoop API")
+api = APIRouter(prefix="/api")
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("studyloop")
 
 
-# Define Models
-class StatusCheck(BaseModel):
-    model_config = ConfigDict(extra="ignore")  # Ignore MongoDB's _id field
-    
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+# ---------- Models ----------
+def now_utc():
+    return datetime.now(timezone.utc)
 
-class StatusCheckCreate(BaseModel):
-    client_name: str
+def new_id(prefix="id"):
+    return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
-# Add your routes to the router instead of directly to app
-@api_router.get("/")
+
+class RegisterIn(BaseModel):
+    email: EmailStr
+    password: str
+    name: str
+    nivel_ensino: Optional[str] = None
+    horas_diarias: Optional[int] = 1
+
+class LoginIn(BaseModel):
+    email: EmailStr
+    password: str
+
+class UserOut(BaseModel):
+    user_id: str
+    email: str
+    name: str
+    auth_provider: str
+    nivel_ensino: Optional[str] = None
+    horas_diarias: Optional[int] = 1
+    streak_atual: int = 0
+    streak_maximo: int = 0
+    plano: str = "free"
+    picture: Optional[str] = None
+    onboarding_done: bool = False
+
+
+class MateriaIn(BaseModel):
+    nome: str
+    cor: str = "#F5A623"
+    icone: str = "book"
+
+class MateriaUpdate(BaseModel):
+    nome: Optional[str] = None
+    cor: Optional[str] = None
+    icone: Optional[str] = None
+    arquivada: Optional[bool] = None
+
+
+class FonteCreateText(BaseModel):
+    materia_id: str
+    titulo: str
+    conteudo: str
+
+class FonteCreateLink(BaseModel):
+    materia_id: str
+    titulo: Optional[str] = None
+    url: str
+
+
+class SessaoCreate(BaseModel):
+    materia_id: Optional[str] = None
+    fonte_id: Optional[str] = None
+    tipo: Literal["quiz", "flashcard", "5min"]
+    total_questoes: int
+    acertos: int
+    duracao_segundos: int
+
+class FlashcardReview(BaseModel):
+    grade: int  # 0=Errei, 1=Difícil, 2=Bom, 3=Fácil
+
+
+# ---------- Auth helpers ----------
+def hash_pw(p: str) -> str:
+    return bcrypt.hashpw(p.encode(), bcrypt.gensalt()).decode()
+
+def verify_pw(p: str, h: str) -> bool:
+    try:
+        return bcrypt.checkpw(p.encode(), h.encode())
+    except Exception:
+        return False
+
+def make_jwt(user_id: str) -> str:
+    payload = {"user_id": user_id, "exp": datetime.now(timezone.utc) + timedelta(days=30)}
+    return pyjwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
+
+
+async def get_user_from_token(token: str) -> Optional[dict]:
+    # Try JWT first
+    try:
+        payload = pyjwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+        uid = payload.get("user_id")
+        if uid:
+            u = await db.users.find_one({"user_id": uid}, {"_id": 0, "password_hash": 0})
+            if u:
+                return u
+    except Exception:
+        pass
+    # Try session_token (Emergent Google Auth)
+    sess = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
+    if sess:
+        expires_at = sess.get("expires_at")
+        if isinstance(expires_at, str):
+            expires_at = datetime.fromisoformat(expires_at)
+        if expires_at and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at and expires_at < datetime.now(timezone.utc):
+            return None
+        u = await db.users.find_one({"user_id": sess["user_id"]}, {"_id": 0, "password_hash": 0})
+        return u
+    return None
+
+
+async def current_user(request: Request) -> dict:
+    # Check cookie first
+    token = request.cookies.get("session_token")
+    if not token:
+        # Authorization header fallback
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            token = auth[7:]
+    if not token:
+        raise HTTPException(status_code=401, detail="Não autenticado")
+    user = await get_user_from_token(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Sessão inválida")
+    return user
+
+
+# ---------- AUTH endpoints ----------
+@api.post("/auth/register")
+async def register(body: RegisterIn):
+    existing = await db.users.find_one({"email": body.email})
+    if existing:
+        raise HTTPException(status_code=400, detail="Email já cadastrado")
+    user_id = new_id("user")
+    user = {
+        "user_id": user_id,
+        "email": body.email,
+        "name": body.name,
+        "password_hash": hash_pw(body.password),
+        "auth_provider": "email",
+        "nivel_ensino": body.nivel_ensino,
+        "horas_diarias": body.horas_diarias or 1,
+        "streak_atual": 0,
+        "streak_maximo": 0,
+        "plano": "free",
+        "onboarding_done": False,
+        "created_at": now_utc().isoformat(),
+    }
+    await db.users.insert_one(user)
+    token = make_jwt(user_id)
+    user.pop("password_hash", None)
+    user.pop("_id", None)
+    return {"token": token, "user": user}
+
+
+@api.post("/auth/login")
+async def login(body: LoginIn):
+    u = await db.users.find_one({"email": body.email})
+    if not u or u.get("auth_provider") != "email":
+        raise HTTPException(status_code=401, detail="Credenciais inválidas")
+    if not verify_pw(body.password, u.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="Credenciais inválidas")
+    token = make_jwt(u["user_id"])
+    u.pop("password_hash", None)
+    u.pop("_id", None)
+    return {"token": token, "user": u}
+
+
+# REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
+@api.post("/auth/google/session")
+async def google_session(request: Request, response: Response):
+    body = await request.json()
+    session_id = body.get("session_id")
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id obrigatório")
+    # Call Emergent Auth
+    try:
+        r = http_requests.get(
+            "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
+            headers={"X-Session-ID": session_id},
+            timeout=10,
+        )
+        if r.status_code != 200:
+            raise HTTPException(status_code=401, detail="Sessão Google inválida")
+        data = r.json()
+    except http_requests.RequestException:
+        raise HTTPException(status_code=502, detail="Erro ao validar sessão Google")
+
+    email = data.get("email")
+    name = data.get("name") or email
+    picture = data.get("picture")
+    session_token = data.get("session_token")
+
+    # Find or create user
+    user = await db.users.find_one({"email": email})
+    if not user:
+        user_id = new_id("user")
+        user = {
+            "user_id": user_id,
+            "email": email,
+            "name": name,
+            "auth_provider": "google",
+            "picture": picture,
+            "nivel_ensino": None,
+            "horas_diarias": 1,
+            "streak_atual": 0,
+            "streak_maximo": 0,
+            "plano": "free",
+            "onboarding_done": False,
+            "created_at": now_utc().isoformat(),
+        }
+        await db.users.insert_one(user)
+    else:
+        await db.users.update_one(
+            {"user_id": user["user_id"]},
+            {"$set": {"picture": picture or user.get("picture"), "name": user.get("name") or name}}
+        )
+
+    # Store session
+    expires_at = now_utc() + timedelta(days=7)
+    await db.user_sessions.insert_one({
+        "user_id": user["user_id"],
+        "session_token": session_token,
+        "expires_at": expires_at.isoformat(),
+        "created_at": now_utc().isoformat(),
+    })
+
+    # Set cookie
+    response.set_cookie(
+        key="session_token",
+        value=session_token,
+        max_age=7 * 24 * 3600,
+        httponly=True,
+        secure=True,
+        samesite="none",
+        path="/",
+    )
+    user.pop("_id", None)
+    user.pop("password_hash", None)
+    return {"user": user, "session_token": session_token}
+
+
+@api.get("/auth/me")
+async def me(user: dict = Depends(current_user)):
+    user.pop("_id", None)
+    user.pop("password_hash", None)
+    return user
+
+
+@api.post("/auth/logout")
+async def logout(request: Request, response: Response):
+    token = request.cookies.get("session_token")
+    if token:
+        await db.user_sessions.delete_one({"session_token": token})
+    response.delete_cookie("session_token", path="/")
+    return {"ok": True}
+
+
+@api.post("/auth/onboarding")
+async def complete_onboarding(body: dict, user: dict = Depends(current_user)):
+    update = {"onboarding_done": True}
+    for f in ("nivel_ensino", "horas_diarias"):
+        if f in body and body[f] is not None:
+            update[f] = body[f]
+    await db.users.update_one({"user_id": user["user_id"]}, {"$set": update})
+    return {"ok": True}
+
+
+# ---------- MATERIAS ----------
+@api.post("/materias")
+async def create_materia(body: MateriaIn, user: dict = Depends(current_user)):
+    m = {
+        "materia_id": new_id("mat"),
+        "user_id": user["user_id"],
+        "nome": body.nome,
+        "cor": body.cor,
+        "icone": body.icone,
+        "arquivada": False,
+        "created_at": now_utc().isoformat(),
+    }
+    await db.materias.insert_one(m)
+    m.pop("_id", None)
+    return m
+
+
+@api.get("/materias")
+async def list_materias(user: dict = Depends(current_user)):
+    items = await db.materias.find(
+        {"user_id": user["user_id"], "arquivada": {"$ne": True}}, {"_id": 0}
+    ).to_list(500)
+    # add counters
+    for m in items:
+        m["total_fontes"] = await db.fontes.count_documents({"materia_id": m["materia_id"]})
+        m["total_questoes"] = await db.questoes.count_documents({"materia_id": m["materia_id"]})
+        m["total_flashcards"] = await db.flashcards.count_documents({"materia_id": m["materia_id"]})
+    return items
+
+
+@api.patch("/materias/{materia_id}")
+async def update_materia(materia_id: str, body: MateriaUpdate, user: dict = Depends(current_user)):
+    upd = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
+    if not upd:
+        return {"ok": True}
+    res = await db.materias.update_one({"materia_id": materia_id, "user_id": user["user_id"]}, {"$set": upd})
+    if res.matched_count == 0:
+        raise HTTPException(404, "Matéria não encontrada")
+    return {"ok": True}
+
+
+@api.delete("/materias/{materia_id}")
+async def delete_materia(materia_id: str, user: dict = Depends(current_user)):
+    await db.materias.delete_one({"materia_id": materia_id, "user_id": user["user_id"]})
+    await db.fontes.delete_many({"materia_id": materia_id, "user_id": user["user_id"]})
+    await db.questoes.delete_many({"materia_id": materia_id, "user_id": user["user_id"]})
+    await db.flashcards.delete_many({"materia_id": materia_id, "user_id": user["user_id"]})
+    return {"ok": True}
+
+
+# ---------- CONTENT INGESTION ----------
+async def _check_materia(materia_id: str, user_id: str):
+    m = await db.materias.find_one({"materia_id": materia_id, "user_id": user_id}, {"_id": 0})
+    if not m:
+        raise HTTPException(404, "Matéria não encontrada")
+    return m
+
+
+def _scrape_url(url: str) -> tuple[str, str]:
+    """Returns (title, text)"""
+    try:
+        r = http_requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        soup = BeautifulSoup(r.text, "lxml")
+        title = soup.title.string.strip() if soup.title and soup.title.string else url
+        # Remove scripts/styles
+        for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
+            tag.decompose()
+        text = soup.get_text(separator="\n", strip=True)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return title[:200], text[:20000]
+    except Exception as e:
+        raise HTTPException(400, f"Erro ao buscar URL: {e}")
+
+
+def _extract_pdf(file_bytes: bytes) -> str:
+    try:
+        reader = PdfReader(io.BytesIO(file_bytes))
+        text = ""
+        for page in reader.pages[:50]:  # cap 50 pages
+            text += page.extract_text() or ""
+            text += "\n\n"
+        return text[:30000]
+    except Exception as e:
+        raise HTTPException(400, f"Erro ao ler PDF: {e}")
+
+
+async def _ocr_with_claude(image_bytes: bytes) -> str:
+    """Use Claude vision to OCR a study material image."""
+    b64 = base64.b64encode(image_bytes).decode()
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"ocr-{uuid.uuid4().hex[:8]}",
+        system_message="Você é um especialista em OCR (reconhecimento óptico de caracteres). Extraia todo o texto legível da imagem fornecida, mantendo a estrutura (parágrafos, listas, títulos). Retorne apenas o texto extraído, sem comentários adicionais."
+    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+
+    msg = UserMessage(
+        text="Extraia todo o texto desta imagem (página de livro, caderno ou material de estudo). Mantenha parágrafos e estrutura.",
+        file_contents=[ImageContent(image_base64=b64)]
+    )
+    text = await chat.send_message(msg)
+    return text[:20000]
+
+
+async def _generate_questions_and_flashcards(content: str, count_questions: int = 6, count_flashcards: int = 6) -> dict:
+    """Use Claude to generate quiz questions and flashcards from content."""
+    system = (
+        "Você é um professor especialista em criar materiais de estudo eficazes para estudantes brasileiros. "
+        "A partir de um conteúdo de estudo, você gera questões de múltipla escolha (com 4 opções, apenas 1 correta) "
+        "e flashcards (pergunta na frente, resposta concisa no verso). "
+        "Use linguagem clara, em português brasileiro. As questões devem testar compreensão real, não memorização superficial. "
+        "Retorne APENAS um JSON válido no formato exato abaixo, sem texto antes ou depois, sem markdown:\n"
+        "{\n"
+        '  "resumo": "<resumo de 2-3 frases do conteúdo>",\n'
+        '  "questoes": [\n'
+        '    {"enunciado": "...", "opcoes": ["A", "B", "C", "D"], "resposta_correta": 0, "explicacao": "...", "dificuldade": "facil|medio|dificil"}\n'
+        "  ],\n"
+        '  "flashcards": [\n'
+        '    {"frente": "...", "verso": "..."}\n'
+        "  ]\n"
+        "}"
+    )
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"gen-{uuid.uuid4().hex[:8]}",
+        system_message=system,
+    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+
+    prompt = (
+        f"Gere {count_questions} questões de múltipla escolha e {count_flashcards} flashcards "
+        f"a partir do seguinte conteúdo de estudo:\n\n---\n{content[:12000]}\n---\n\nRetorne apenas o JSON."
+    )
+    raw = await chat.send_message(UserMessage(text=prompt))
+    # Extract JSON from response (sometimes wrapped in ```json)
+    raw = raw.strip()
+    m = re.search(r"\{[\s\S]*\}", raw)
+    if not m:
+        raise HTTPException(500, "IA retornou formato inválido")
+    try:
+        data = json.loads(m.group(0))
+    except json.JSONDecodeError as e:
+        raise HTTPException(500, f"Erro ao parsear JSON da IA: {e}")
+    return data
+
+
+async def _create_fonte_and_generate(user_id: str, materia_id: str, titulo: str, tipo: str, conteudo: str):
+    fonte_id = new_id("fonte")
+    fonte_doc = {
+        "fonte_id": fonte_id,
+        "materia_id": materia_id,
+        "user_id": user_id,
+        "titulo": titulo[:200],
+        "tipo": tipo,
+        "status": "processing",
+        "conteudo_raw": conteudo[:30000],
+        "resumo_ia": "",
+        "total_questoes": 0,
+        "total_flashcards": 0,
+        "created_at": now_utc().isoformat(),
+    }
+    await db.fontes.insert_one(fonte_doc)
+
+    try:
+        gen = await _generate_questions_and_flashcards(conteudo)
+    except Exception as e:
+        await db.fontes.update_one({"fonte_id": fonte_id}, {"$set": {"status": "error", "error": str(e)}})
+        raise
+
+    # Save questions
+    questoes = []
+    for q in gen.get("questoes", []):
+        questoes.append({
+            "questao_id": new_id("q"),
+            "fonte_id": fonte_id,
+            "materia_id": materia_id,
+            "user_id": user_id,
+            "tipo": "multipla_escolha",
+            "enunciado": q.get("enunciado", ""),
+            "opcoes": q.get("opcoes", []),
+            "resposta_correta": q.get("resposta_correta", 0),
+            "explicacao": q.get("explicacao", ""),
+            "dificuldade": q.get("dificuldade", "medio"),
+            "created_at": now_utc().isoformat(),
+        })
+    if questoes:
+        await db.questoes.insert_many(questoes)
+
+    # Save flashcards
+    flashcards = []
+    for f in gen.get("flashcards", []):
+        flashcards.append({
+            "flashcard_id": new_id("fc"),
+            "fonte_id": fonte_id,
+            "materia_id": materia_id,
+            "user_id": user_id,
+            "frente": f.get("frente", ""),
+            "verso": f.get("verso", ""),
+            "fator_facilidade": 2.5,
+            "intervalo_dias": 0,
+            "repeticoes": 0,
+            "proxima_revisao": now_utc().isoformat(),
+            "created_at": now_utc().isoformat(),
+        })
+    if flashcards:
+        await db.flashcards.insert_many(flashcards)
+
+    await db.fontes.update_one(
+        {"fonte_id": fonte_id},
+        {"$set": {
+            "status": "ready",
+            "resumo_ia": gen.get("resumo", ""),
+            "total_questoes": len(questoes),
+            "total_flashcards": len(flashcards),
+        }}
+    )
+    out = await db.fontes.find_one({"fonte_id": fonte_id}, {"_id": 0})
+    return out
+
+
+@api.post("/fontes/text")
+async def add_text_source(body: FonteCreateText, user: dict = Depends(current_user)):
+    await _check_materia(body.materia_id, user["user_id"])
+    return await _create_fonte_and_generate(user["user_id"], body.materia_id, body.titulo, "texto", body.conteudo)
+
+
+@api.post("/fontes/link")
+async def add_link_source(body: FonteCreateLink, user: dict = Depends(current_user)):
+    await _check_materia(body.materia_id, user["user_id"])
+    title, text = _scrape_url(body.url)
+    return await _create_fonte_and_generate(user["user_id"], body.materia_id, body.titulo or title, "link", text)
+
+
+@api.post("/fontes/pdf")
+async def add_pdf_source(
+    materia_id: str = Form(...),
+    titulo: str = Form(...),
+    file: UploadFile = File(...),
+    user: dict = Depends(current_user),
+):
+    await _check_materia(materia_id, user["user_id"])
+    content = await file.read()
+    text = _extract_pdf(content)
+    if not text.strip():
+        raise HTTPException(400, "PDF sem texto extraível")
+    return await _create_fonte_and_generate(user["user_id"], materia_id, titulo, "pdf", text)
+
+
+@api.post("/fontes/photo")
+async def add_photo_source(
+    materia_id: str = Form(...),
+    titulo: str = Form(...),
+    file: UploadFile = File(...),
+    user: dict = Depends(current_user),
+):
+    await _check_materia(materia_id, user["user_id"])
+    img = await file.read()
+    text = await _ocr_with_claude(img)
+    if not text.strip():
+        raise HTTPException(400, "Não foi possível extrair texto da imagem")
+    return await _create_fonte_and_generate(user["user_id"], materia_id, titulo, "foto", text)
+
+
+@api.get("/fontes/{materia_id}")
+async def list_fontes(materia_id: str, user: dict = Depends(current_user)):
+    items = await db.fontes.find(
+        {"user_id": user["user_id"], "materia_id": materia_id}, {"_id": 0, "conteudo_raw": 0}
+    ).sort("created_at", -1).to_list(200)
+    return items
+
+
+@api.delete("/fontes/{fonte_id}")
+async def delete_fonte(fonte_id: str, user: dict = Depends(current_user)):
+    await db.fontes.delete_one({"fonte_id": fonte_id, "user_id": user["user_id"]})
+    await db.questoes.delete_many({"fonte_id": fonte_id, "user_id": user["user_id"]})
+    await db.flashcards.delete_many({"fonte_id": fonte_id, "user_id": user["user_id"]})
+    return {"ok": True}
+
+
+# ---------- QUIZ / FLASHCARDS ----------
+@api.get("/questoes")
+async def get_questoes(materia_id: Optional[str] = None, fonte_id: Optional[str] = None, limit: int = 10,
+                       user: dict = Depends(current_user)):
+    q = {"user_id": user["user_id"]}
+    if materia_id:
+        q["materia_id"] = materia_id
+    if fonte_id:
+        q["fonte_id"] = fonte_id
+    items = await db.questoes.find(q, {"_id": 0}).to_list(limit)
+    return items
+
+
+@api.get("/questoes/5min")
+async def get_5min_questions(user: dict = Depends(current_user)):
+    """Random 5 questions across all user's content."""
+    pipeline = [
+        {"$match": {"user_id": user["user_id"]}},
+        {"$sample": {"size": 5}},
+        {"$project": {"_id": 0}},
+    ]
+    items = await db.questoes.aggregate(pipeline).to_list(5)
+    return items
+
+
+@api.get("/flashcards/due/{materia_id}")
+async def get_due_flashcards(materia_id: str, user: dict = Depends(current_user)):
+    now_iso = now_utc().isoformat()
+    items = await db.flashcards.find(
+        {"user_id": user["user_id"], "materia_id": materia_id, "proxima_revisao": {"$lte": now_iso}},
+        {"_id": 0}
+    ).to_list(50)
+    if not items:
+        # fallback: all
+        items = await db.flashcards.find(
+            {"user_id": user["user_id"], "materia_id": materia_id}, {"_id": 0}
+        ).to_list(50)
+    return items
+
+
+@api.post("/flashcards/{flashcard_id}/review")
+async def review_flashcard(flashcard_id: str, body: FlashcardReview, user: dict = Depends(current_user)):
+    """SM-2 simplified SRS algorithm."""
+    fc = await db.flashcards.find_one({"flashcard_id": flashcard_id, "user_id": user["user_id"]}, {"_id": 0})
+    if not fc:
+        raise HTTPException(404, "Flashcard não encontrado")
+    grade = body.grade  # 0..3
+    ef = float(fc.get("fator_facilidade", 2.5))
+    reps = int(fc.get("repeticoes", 0))
+    interval = int(fc.get("intervalo_dias", 0))
+
+    # Map grade to SM-2 quality (0=again, 3=easy)
+    quality = {0: 1, 1: 3, 2: 4, 3: 5}.get(grade, 3)
+
+    if quality < 3:
+        reps = 0
+        interval = 1
+    else:
+        if reps == 0:
+            interval = 1
+        elif reps == 1:
+            interval = 3
+        else:
+            interval = max(1, round(interval * ef))
+        reps += 1
+
+    ef = max(1.3, ef + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02)))
+
+    proxima = now_utc() + timedelta(days=interval)
+    await db.flashcards.update_one(
+        {"flashcard_id": flashcard_id},
+        {"$set": {
+            "fator_facilidade": ef,
+            "intervalo_dias": interval,
+            "repeticoes": reps,
+            "proxima_revisao": proxima.isoformat(),
+        }}
+    )
+    return {"ok": True, "proxima_revisao": proxima.isoformat(), "intervalo_dias": interval}
+
+
+# ---------- SESSIONS / STATS ----------
+@api.post("/sessoes")
+async def save_sessao(body: SessaoCreate, user: dict = Depends(current_user)):
+    pct = (body.acertos / body.total_questoes * 100) if body.total_questoes else 0
+    sess = {
+        "sessao_id": new_id("sess"),
+        "user_id": user["user_id"],
+        "materia_id": body.materia_id,
+        "fonte_id": body.fonte_id,
+        "tipo": body.tipo,
+        "total_questoes": body.total_questoes,
+        "acertos": body.acertos,
+        "duracao_segundos": body.duracao_segundos,
+        "concluida": True,
+        "pontuacao": round(pct, 1),
+        "created_at": now_utc().isoformat(),
+    }
+    await db.sessoes.insert_one(sess)
+
+    # Update streak
+    user_doc = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    last = user_doc.get("ultima_sessao_data")
+    today = now_utc().date()
+    streak = user_doc.get("streak_atual", 0)
+    if last:
+        last_date = datetime.fromisoformat(last).date() if isinstance(last, str) else last
+        delta = (today - last_date).days
+        if delta == 0:
+            pass  # same day, no change
+        elif delta == 1:
+            streak += 1
+        else:
+            streak = 1
+    else:
+        streak = 1
+    max_streak = max(user_doc.get("streak_maximo", 0), streak)
+    await db.users.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": {"streak_atual": streak, "streak_maximo": max_streak, "ultima_sessao_data": today.isoformat()}}
+    )
+    sess.pop("_id", None)
+    return sess
+
+
+@api.get("/stats")
+async def get_stats(user: dict = Depends(current_user)):
+    user_doc = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0, "password_hash": 0})
+    sess_list = await db.sessoes.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(5000)
+    total_questoes = sum(s.get("total_questoes", 0) for s in sess_list)
+    total_acertos = sum(s.get("acertos", 0) for s in sess_list)
+    total_segundos = sum(s.get("duracao_segundos", 0) for s in sess_list)
+    taxa = (total_acertos / total_questoes * 100) if total_questoes else 0
+
+    # Heatmap: last 365 days, count of questoes per day
+    heatmap = {}
+    for s in sess_list:
+        d = s.get("created_at", "")[:10]
+        heatmap[d] = heatmap.get(d, 0) + s.get("total_questoes", 0)
+
+    # Last 7 days bar
+    last7 = []
+    for i in range(6, -1, -1):
+        d = (now_utc() - timedelta(days=i)).date().isoformat()
+        last7.append({"date": d, "count": heatmap.get(d, 0)})
+
+    return {
+        "user": user_doc,
+        "total_questoes": total_questoes,
+        "total_acertos": total_acertos,
+        "taxa_acerto": round(taxa, 1),
+        "total_horas": round(total_segundos / 3600, 1),
+        "streak_atual": user_doc.get("streak_atual", 0),
+        "streak_maximo": user_doc.get("streak_maximo", 0),
+        "heatmap": heatmap,
+        "last7": last7,
+        "total_sessoes": len(sess_list),
+    }
+
+
+@api.get("/home")
+async def home_dashboard(user: dict = Depends(current_user)):
+    total_questoes = await db.questoes.count_documents({"user_id": user["user_id"]})
+    total_materias = await db.materias.count_documents({"user_id": user["user_id"]})
+    # Last session
+    last_sess = await db.sessoes.find(
+        {"user_id": user["user_id"]}, {"_id": 0}
+    ).sort("created_at", -1).limit(1).to_list(1)
+    last_materia = None
+    if last_sess and last_sess[0].get("materia_id"):
+        last_materia = await db.materias.find_one(
+            {"materia_id": last_sess[0]["materia_id"]}, {"_id": 0}
+        )
+    user_doc = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0, "password_hash": 0})
+    return {
+        "user": user_doc,
+        "questoes_disponiveis": total_questoes,
+        "total_materias": total_materias,
+        "last_session": last_sess[0] if last_sess else None,
+        "last_materia": last_materia,
+    }
+
+
+@api.get("/")
 async def root():
-    return {"message": "Hello World"}
+    return {"ok": True, "service": "StudyLoop API"}
 
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.model_dump()
-    status_obj = StatusCheck(**status_dict)
-    
-    # Convert to dict and serialize datetime to ISO string for MongoDB
-    doc = status_obj.model_dump()
-    doc['timestamp'] = doc['timestamp'].isoformat()
-    
-    _ = await db.status_checks.insert_one(doc)
-    return status_obj
 
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    # Exclude MongoDB's _id field from the query results
-    status_checks = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
-    
-    # Convert ISO string timestamps back to datetime objects
-    for check in status_checks:
-        if isinstance(check['timestamp'], str):
-            check['timestamp'] = datetime.fromisoformat(check['timestamp'])
-    
-    return status_checks
-
-# Include the router in the main app
-app.include_router(api_router)
+# Include router
+app.include_router(api)
 
 app.add_middleware(
     CORSMiddleware,
@@ -75,15 +779,10 @@ app.add_middleware(
     allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
 
 @app.on_event("shutdown")
-async def shutdown_db_client():
+async def shutdown_db():
     client.close()
