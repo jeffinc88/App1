@@ -115,6 +115,11 @@ class AvaliacaoIn(BaseModel):
     comentario: Optional[str] = None
 
 
+class NpsIn(BaseModel):
+    nota: int  # 0..10
+    comentario: Optional[str] = None
+
+
 # ---------- Auth helpers ----------
 def hash_pw(p: str) -> str:
     return bcrypt.hashpw(p.encode(), bcrypt.gensalt()).decode()
@@ -732,6 +737,112 @@ async def save_avaliacao(body: AvaliacaoIn, user: dict = Depends(current_user)):
     await db.avaliacoes.insert_one(doc)
     doc.pop("_id", None)
     return doc
+
+
+# ---------- NPS ----------
+NPS_ELIGIBLE_DAYS = 14
+NPS_MIN_SESSIONS = 3
+NPS_MAX_ATTEMPTS = 2
+NPS_SNOOZE_DAYS = 7
+
+
+async def _nps_should_show(user: dict) -> bool:
+    # Account age
+    created_at = user.get("created_at")
+    if not created_at:
+        return False
+    created_dt = datetime.fromisoformat(created_at) if isinstance(created_at, str) else created_at
+    if created_dt.tzinfo is None:
+        created_dt = created_dt.replace(tzinfo=timezone.utc)
+    if (now_utc() - created_dt).days < NPS_ELIGIBLE_DAYS:
+        return False
+    # Sessions count
+    sess_count = await db.sessoes.count_documents({"user_id": user["user_id"], "concluida": True})
+    if sess_count < NPS_MIN_SESSIONS:
+        return False
+    # Survey record
+    rec = await db.nps_surveys.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    if not rec:
+        return True
+    if rec.get("status") == "answered":
+        return False
+    if rec.get("attempts", 0) >= NPS_MAX_ATTEMPTS:
+        return False
+    snoozed_until = rec.get("snoozed_until")
+    if snoozed_until:
+        s_dt = datetime.fromisoformat(snoozed_until) if isinstance(snoozed_until, str) else snoozed_until
+        if s_dt.tzinfo is None:
+            s_dt = s_dt.replace(tzinfo=timezone.utc)
+        if s_dt > now_utc():
+            return False
+    return True
+
+
+@api.get("/nps/status")
+async def nps_status(user: dict = Depends(current_user)):
+    show = await _nps_should_show(user)
+    return {"show": show}
+
+
+@api.post("/nps/submit")
+async def nps_submit(body: NpsIn, user: dict = Depends(current_user)):
+    if not (0 <= body.nota <= 10):
+        raise HTTPException(400, "Nota deve ser entre 0 e 10")
+    now_iso = now_utc().isoformat()
+    rec = await db.nps_surveys.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    doc_set = {
+        "status": "answered",
+        "nota": body.nota,
+        "comentario": (body.comentario or "")[:1000],
+        "answered_at": now_iso,
+        "last_shown_at": now_iso,
+    }
+    if rec:
+        await db.nps_surveys.update_one({"user_id": user["user_id"]}, {"$set": doc_set})
+        survey_id = rec.get("survey_id")
+    else:
+        survey_id = new_id("nps")
+        await db.nps_surveys.insert_one({
+            "survey_id": survey_id,
+            "user_id": user["user_id"],
+            "attempts": 1,
+            "created_at": now_iso,
+            **doc_set,
+        })
+    return {"ok": True, "survey_id": survey_id, "nota": body.nota}
+
+
+@api.post("/nps/snooze")
+async def nps_snooze(user: dict = Depends(current_user)):
+    now_iso = now_utc().isoformat()
+    snooze_until = (now_utc() + timedelta(days=NPS_SNOOZE_DAYS)).isoformat()
+    rec = await db.nps_surveys.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    if not rec:
+        await db.nps_surveys.insert_one({
+            "survey_id": new_id("nps"),
+            "user_id": user["user_id"],
+            "status": "snoozed",
+            "attempts": 1,
+            "snoozed_until": snooze_until,
+            "last_shown_at": now_iso,
+            "created_at": now_iso,
+        })
+        return {"ok": True, "attempts": 1, "snoozed_until": snooze_until}
+
+    attempts = int(rec.get("attempts", 0)) + 1
+    upd = {
+        "attempts": attempts,
+        "last_shown_at": now_iso,
+    }
+    if attempts >= NPS_MAX_ATTEMPTS:
+        # Final dismiss — never show again
+        upd["status"] = "dismissed"
+        upd["snoozed_until"] = None
+    else:
+        upd["status"] = "snoozed"
+        upd["snoozed_until"] = snooze_until
+    await db.nps_surveys.update_one({"user_id": user["user_id"]}, {"$set": upd})
+    return {"ok": True, "attempts": attempts, "snoozed_until": upd.get("snoozed_until")}
 
 
 @api.get("/stats")

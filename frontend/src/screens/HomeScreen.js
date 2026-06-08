@@ -4,14 +4,21 @@ import { motion } from "framer-motion";
 import { Flame, Sparkles, Zap, ArrowRight, BookOpen, Clock, TrendingUp, Plus } from "lucide-react";
 import { api } from "../api";
 import { useAuth } from "../AuthContext";
+import NpsModal from "../components/NpsModal";
 
 export default function HomeScreen() {
   const { user } = useAuth();
   const [data, setData] = useState(null);
+  const [npsOpen, setNpsOpen] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
     api.get("/home").then((r) => setData(r.data)).catch(() => {});
+    // Defer NPS check slightly so home renders smoothly first
+    const t = setTimeout(() => {
+      api.get("/nps/status").then((r) => { if (r.data?.show) setNpsOpen(true); }).catch(() => {});
+    }, 900);
+    return () => clearTimeout(t);
   }, []);
 
   const firstName = (user?.name || "").split(" ")[0] || "Aluno";
@@ -127,6 +134,8 @@ export default function HomeScreen() {
           <p className="font-bold text-xl heading">{data?.total_materias ?? 0}</p>
         </div>
       </div>
+
+      <NpsModal open={npsOpen} onClose={() => setNpsOpen(false)} />
     </div>
   );
 }
