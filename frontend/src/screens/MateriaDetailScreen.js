@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowLeft, Plus, FileText, Link as LinkIcon, FileUp, Camera, BookOpen, Layers, Sparkles, X, Loader2, Trash2, Lock } from "lucide-react";
+import { ArrowLeft, Plus, FileText, Link as LinkIcon, FileUp, Camera, BookOpen, Layers, Sparkles, X, Loader2, Trash2, Lock, Lightbulb } from "lucide-react";
 import { api } from "../api";
 import { useAuth } from "../AuthContext";
 import { usePaywall } from "../PaywallContext";
+import { isExatasMateria } from "../lib/exatas";
 
 const TIPO_ICON = { texto: FileText, link: LinkIcon, pdf: FileUp, foto: Camera };
 
@@ -59,6 +60,8 @@ export default function MateriaDetailScreen() {
             <p className="text-xs text-slate-400">{fontes.length} {fontes.length === 1 ? "fonte" : "fontes"}</p>
           </div>
         </div>
+
+        <ExatasTipCard materia={materia} onAck={load} />
 
         <div className="grid grid-cols-2 gap-3 mt-5">
           <button
@@ -128,6 +131,51 @@ export default function MateriaDetailScreen() {
 
       <AddContentSheet open={open} onClose={() => setOpen(false)} materiaId={id} onCreated={load} />
     </div>
+  );
+}
+
+function ExatasTipCard({ materia, onAck }) {
+  const [ack, setAck] = useState(false);
+  if (!materia || materia.aviso_exatas_visto || ack) return null;
+  if (!isExatasMateria(materia.nome)) return null;
+
+  const handleAck = async () => {
+    setAck(true); // optimistic — hide immediately
+    try {
+      await api.patch(`/materias/${materia.materia_id}`, { aviso_exatas_visto: true });
+    } catch (_e) { /* noop — will retry on next load */ }
+    onAck?.();
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, height: 0 }}
+      transition={{ duration: 0.35, ease: [0.4, 0, 0.2, 1] }}
+      className="mt-5 relative overflow-hidden rounded-2xl p-5 bg-gradient-to-br from-[#1A1D27] to-[#12141D] border border-[#F5A623]/30"
+      data-testid="exatas-tip"
+    >
+      <div className="absolute -top-8 -right-8 w-32 h-32 rounded-full bg-[#F5A623]/20 blur-2xl" />
+      <div className="relative">
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-2xl" aria-hidden="true">💡</span>
+          <Lightbulb size={0} className="hidden" />
+          <h3 className="font-bold heading text-base">Dica para este material</h3>
+        </div>
+        <p className="text-sm text-slate-300 leading-relaxed mb-4">
+          Este material tem muito conteúdo de cálculo e fórmulas. O StudyLoop vai focar nas
+          questões conceituais — definições, propriedades e interpretação — que são a base
+          para qualquer cálculo. Para praticar a resolução dos exercícios em si, use o
+          caderno junto com o app. Os dois juntos fazem toda a diferença.
+        </p>
+        <button
+          onClick={handleAck}
+          className="px-4 py-2 rounded-xl bg-[#F5A623] text-[#090A0F] text-sm font-bold active:scale-95 transition"
+          data-testid="exatas-ack"
+        >Entendi</button>
+      </div>
+    </motion.div>
   );
 }
 

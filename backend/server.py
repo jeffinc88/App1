@@ -82,6 +82,7 @@ class MateriaUpdate(BaseModel):
     cor: Optional[str] = None
     icone: Optional[str] = None
     arquivada: Optional[bool] = None
+    aviso_exatas_visto: Optional[bool] = None
 
 
 class FonteCreateText(BaseModel):
@@ -550,13 +551,15 @@ async def admin_metrics(_: dict = Depends(require_admin)):
 # ---------- MATERIAS ----------
 @api.post("/materias")
 async def create_materia(body: MateriaIn, user: dict = Depends(current_user)):
+    nome_corrigido = await _normalize_pt_title(body.nome)
     m = {
         "materia_id": new_id("mat"),
         "user_id": user["user_id"],
-        "nome": body.nome,
+        "nome": nome_corrigido,
         "cor": body.cor,
         "icone": body.icone,
         "arquivada": False,
+        "aviso_exatas_visto": False,
         "created_at": now_utc().isoformat(),
     }
     await db.materias.insert_one(m)
@@ -580,6 +583,8 @@ async def list_materias(user: dict = Depends(current_user)):
 @api.patch("/materias/{materia_id}")
 async def update_materia(materia_id: str, body: MateriaUpdate, user: dict = Depends(current_user)):
     upd = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
+    if "nome" in upd and upd["nome"]:
+        upd["nome"] = await _normalize_pt_title(upd["nome"])
     if not upd:
         return {"ok": True}
     res = await db.materias.update_one({"materia_id": materia_id, "user_id": user["user_id"]}, {"$set": upd})
@@ -691,6 +696,71 @@ async def _generate_questions_and_flashcards(content: str, count_questions: int 
     return data
 
 
+# ---------- Title normalization (PT-BR accents + capitalization) ----------
+# Quick dict for the most common subjects — instant lookup, avoids LLM call.
+_COMMON_TITLES = {
+    "matematica": "Matemática", "math": "Matemática", "mat": "Matemática",
+    "portugues": "Português", "port": "Português", "lingua portuguesa": "Língua Portuguesa",
+    "fisica": "Física", "physics": "Física",
+    "quimica": "Química", "chemistry": "Química",
+    "biologia": "Biologia", "bio": "Biologia",
+    "historia": "História", "geografia": "Geografia",
+    "filosofia": "Filosofia", "sociologia": "Sociologia",
+    "ingles": "Inglês", "espanhol": "Espanhol",
+    "literatura": "Literatura", "redacao": "Redação",
+    "calculo": "Cálculo", "algebra": "Álgebra", "geometria": "Geometria",
+    "trigonometria": "Trigonometria", "estatistica": "Estatística",
+    "ligacoes quimicas": "Ligações Químicas", "termodinamica": "Termodinâmica",
+    "anatomia": "Anatomia", "genetica": "Genética", "ecologia": "Ecologia",
+    "constituicao": "Constituição", "direito constitucional": "Direito Constitucional",
+    "direito civil": "Direito Civil", "direito penal": "Direito Penal",
+    "economia": "Economia", "contabilidade": "Contabilidade",
+    "informatica": "Informática", "programacao": "Programação",
+    "logica": "Lógica",
+}
+
+
+async def _normalize_pt_title(raw: str) -> str:
+    """Normalize accents + title case in PT-BR. Uses local dict first, Claude as fallback."""
+    if not raw or not raw.strip():
+        return raw
+    text = raw.strip()
+    if len(text) > 120:
+        text = text[:120]
+    key = text.lower()
+    if key in _COMMON_TITLES:
+        return _COMMON_TITLES[key]
+    # Skip LLM for very short or already-accented text
+    has_accent = any(ch in text for ch in "áàãâäéèêëíïóòõôöúùûüçÁÀÃÂÄÉÈÊËÍÏÓÒÕÔÖÚÙÛÜÇñÑ")
+    is_short_word = " " not in text and len(text) <= 3
+    if has_accent or is_short_word:
+        # Just apply Title-case while preserving existing accents
+        return " ".join(w[:1].upper() + w[1:] if w else w for w in text.split())
+    # Fallback: Claude for nuanced normalization
+    try:
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY,
+            session_id=f"norm-{uuid.uuid4().hex[:8]}",
+            system_message=(
+                "Você corrige acentuação e capitalização de títulos curtos em português brasileiro. "
+                "Regras: 1) adicione acentos ausentes (ex.: 'matematica' → 'Matemática'); "
+                "2) capitalize Title Case (primeira letra maiúscula em cada palavra significativa); "
+                "3) preserve nomes próprios e siglas; "
+                "4) NÃO traduza; 5) NÃO adicione palavras novas. "
+                "Retorne APENAS o título corrigido, sem aspas, sem comentários, sem ponto final."
+            ),
+        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+        out = await chat.send_message(UserMessage(text=text))
+        cleaned = (out or "").strip().strip('"').strip("'").rstrip(".")
+        # Safety: keep length reasonable and not empty
+        if 1 <= len(cleaned) <= 200:
+            return cleaned
+    except Exception as e:
+        logger.warning(f"normalize_pt_title fallback for {text!r}: {e}")
+    # Final fallback: simple title case of original
+    return " ".join(w[:1].upper() + w[1:] if w else w for w in text.split())
+
+
 async def _create_fonte_and_generate(user_id: str, materia_id: str, titulo: str, tipo: str, conteudo: str):
     fonte_id = new_id("fonte")
     fonte_doc = {
@@ -769,7 +839,8 @@ async def _create_fonte_and_generate(user_id: str, materia_id: str, titulo: str,
 async def add_text_source(body: FonteCreateText, user: dict = Depends(current_user)):
     await _check_materia(body.materia_id, user["user_id"])
     await _enforce_fonte_limit(user, "texto")
-    return await _create_fonte_and_generate(user["user_id"], body.materia_id, body.titulo, "texto", body.conteudo)
+    titulo = await _normalize_pt_title(body.titulo)
+    return await _create_fonte_and_generate(user["user_id"], body.materia_id, titulo, "texto", body.conteudo)
 
 
 @api.post("/fontes/link")
@@ -777,7 +848,8 @@ async def add_link_source(body: FonteCreateLink, user: dict = Depends(current_us
     await _check_materia(body.materia_id, user["user_id"])
     await _enforce_fonte_limit(user, "link")
     title, text = _scrape_url(body.url)
-    return await _create_fonte_and_generate(user["user_id"], body.materia_id, body.titulo or title, "link", text)
+    titulo = await _normalize_pt_title(body.titulo or title)
+    return await _create_fonte_and_generate(user["user_id"], body.materia_id, titulo, "link", text)
 
 
 @api.post("/fontes/pdf")
@@ -793,6 +865,7 @@ async def add_pdf_source(
     text = _extract_pdf(content)
     if not text.strip():
         raise HTTPException(400, "PDF sem texto extraível")
+    titulo = await _normalize_pt_title(titulo)
     return await _create_fonte_and_generate(user["user_id"], materia_id, titulo, "pdf", text)
 
 
@@ -809,6 +882,7 @@ async def add_photo_source(
     text = await _ocr_with_claude(img)
     if not text.strip():
         raise HTTPException(400, "Não foi possível extrair texto da imagem")
+    titulo = await _normalize_pt_title(titulo)
     return await _create_fonte_and_generate(user["user_id"], materia_id, titulo, "foto", text)
 
 
