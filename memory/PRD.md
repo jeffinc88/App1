@@ -51,6 +51,8 @@ The user attached `StudyLoop_Contexto_Desenvolvimento.docx`, a brief for **Study
 
 ## What's been implemented (2026-06-08)
 - Tudo acima. Backend testado 18/18 (incluindo geração de IA real, scraping de Wikipédia, SRS). Frontend testado end-to-end via Playwright (register → onboarding → criar matéria → adicionar fonte texto → IA gerar conteúdo → Modo 5 min).
+- **+ Share da sessão (iteration 3)**: ShareButton no resultado de Quiz e Flashcards gera PNG 1080x1920 via Canvas nativo (logo, materia, score em ring, streak, footer) + Web Share API com fallback de download. Validado 100% headless.
+- **+ Avaliação de questões (iteration 4)**: tela intermediária 🤔 com 5 estrelas + "Enviar" / "Pular" entre Finalizar e tela de resultado. Backend: POST `/api/avaliacoes` { nota 1-5, materia_id?, sessao_id?, fonte_id? } → collection `db.avaliacoes`. Skip não persiste nada. Validado 100% backend + frontend.
 
 ## Backlog (P1)
 - Apple Sign-In (precisa Apple Developer Account + Service ID + .p8)
