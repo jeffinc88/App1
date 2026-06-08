@@ -183,14 +183,14 @@ function AddContentSheet({ open, onClose, materiaId, onCreated }) {
             </div>
 
             {!tipo && (
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-2.5">
                 {tipos.map((t) => {
                   const Icon = t.icon;
                   return (
-                    <button key={t.v} onClick={() => setTipo(t.v)} className="sl-card p-4 text-left active:scale-95 transition" data-testid={`tipo-${t.v}`}>
-                      <div className="w-10 h-10 rounded-xl bg-[#F5A623]/15 text-[#F5A623] flex items-center justify-center mb-3"><Icon size={20} /></div>
-                      <p className="font-semibold">{t.label}</p>
-                      <p className="text-xs text-slate-400 mt-0.5">{t.desc}</p>
+                    <button key={t.v} onClick={() => setTipo(t.v)} className="sl-card p-3 text-left active:scale-95 transition" data-testid={`tipo-${t.v}`}>
+                      <div className="w-9 h-9 rounded-lg bg-[#F5A623]/15 text-[#F5A623] flex items-center justify-center mb-2"><Icon size={18} /></div>
+                      <p className="font-semibold text-sm">{t.label}</p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">{t.desc}</p>
                     </button>
                   );
                 })}
