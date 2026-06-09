@@ -1,6 +1,6 @@
 import { Outlet, NavLink, useLocation } from "react-router-dom";
 import { Home, BookOpen, Users, User } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 
 const tabs = [
   { to: "/app", label: "Início", icon: Home, testid: "tab-inicio" },
@@ -13,18 +13,22 @@ export default function AppLayout() {
   const location = useLocation();
   return (
     <div className="app-shell sl-scroll grain" data-testid="app-shell">
-      <AnimatePresence mode="wait">
-        <motion.div
-          key={location.pathname}
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -8 }}
-          transition={{ duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
-          className="min-h-[100dvh] pb-28"
-        >
-          <Outlet />
-        </motion.div>
-      </AnimatePresence>
+      {/*
+        IMPORTANT: do NOT wrap this in <AnimatePresence mode="wait">.
+        That caused a ~440ms "blackout" between tab switches because the outgoing
+        screen had to finish fading out (opacity 0) BEFORE the incoming one
+        could start fading in. Now the incoming screen mounts immediately and
+        only the enter animation runs, so the tabs feel instant.
+      */}
+      <motion.div
+        key={location.pathname}
+        initial={{ opacity: 0, y: 6 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.18, ease: [0.4, 0, 0.2, 1] }}
+        className="min-h-[100dvh] pb-28"
+      >
+        <Outlet />
+      </motion.div>
 
       <nav
         className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md bg-[#12141D]/85 backdrop-blur-xl border-t border-[#262A36] bn-shell z-50"
