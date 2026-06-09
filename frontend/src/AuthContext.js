@@ -12,6 +12,17 @@ export function AuthProvider({ children }) {
     // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
     try {
       const { data } = await api.get("/auth/me");
+      // Keep the local "onboarding_completed" mirror in sync with the server,
+      // but ONLY upgrade it (false → true). Never clear it here, otherwise a
+      // race where the backend didn't persist the update yet would loop the
+      // user back to /onboarding.
+      if (data?.onboarding_done) {
+        try {
+          localStorage.setItem("onboarding_completed", "true");
+        } catch (_e) {
+          /* noop */
+        }
+      }
       setUser(data);
     } catch {
       setUser(null);
@@ -32,6 +43,13 @@ export function AuthProvider({ children }) {
   const loginWithEmail = async (email, password) => {
     const { data } = await api.post("/auth/login", { email, password });
     localStorage.setItem("sl_token", data.token);
+    // Sync local onboarding flag with the server truth so we never lock a
+    // brand-new user out of the onboarding flow.
+    if (data.user?.onboarding_done) {
+      localStorage.setItem("onboarding_completed", "true");
+    } else {
+      localStorage.removeItem("onboarding_completed");
+    }
     setUser(data.user);
     return data.user;
   };
@@ -39,6 +57,8 @@ export function AuthProvider({ children }) {
   const register = async (payload) => {
     const { data } = await api.post("/auth/register", payload);
     localStorage.setItem("sl_token", data.token);
+    // New registrations always need onboarding — wipe any stale flag.
+    localStorage.removeItem("onboarding_completed");
     setUser(data.user);
     return data.user;
   };
@@ -46,6 +66,7 @@ export function AuthProvider({ children }) {
   const logout = async () => {
     try { await api.post("/auth/logout"); } catch (_e) { /* noop */ }
     localStorage.removeItem("sl_token");
+    localStorage.removeItem("onboarding_completed");
     setUser(null);
   };
 

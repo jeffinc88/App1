@@ -14,18 +14,36 @@ import SocialScreen from "./screens/SocialScreen";
 import PerfilScreen from "./screens/PerfilScreen";
 import AdminScreen from "./screens/AdminScreen";
 
+// Synchronous check for the onboarding flag in localStorage. This runs BEFORE
+// any API call so it works even if the backend is slow, offline, or returns
+// stale data (onboarding_done=false) due to a failed POST.
+function isOnboardingCompletedLocally() {
+  try {
+    return localStorage.getItem("onboarding_completed") === "true";
+  } catch (_e) {
+    return false;
+  }
+}
+
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
   if (loading) return <Splash />;
   if (!user) return <Navigate to="/" replace />;
-  if (!user.onboarding_done) return <Navigate to="/onboarding" replace />;
+  // Local flag wins over (potentially stale) server flag — prevents the
+  // post-onboarding loop where backend hasn't persisted the update yet.
+  if (!user.onboarding_done && !isOnboardingCompletedLocally()) {
+    return <Navigate to="/onboarding" replace />;
+  }
   return children;
 }
 
 function PublicRoute({ children }) {
   const { user, loading } = useAuth();
   if (loading) return <Splash />;
-  if (user) return <Navigate to={user.onboarding_done ? "/app" : "/onboarding"} replace />;
+  if (user) {
+    const onboarded = user.onboarding_done || isOnboardingCompletedLocally();
+    return <Navigate to={onboarded ? "/app" : "/onboarding"} replace />;
+  }
   return children;
 }
 
@@ -70,7 +88,11 @@ function ProtectedOnboardingRoute({ children }) {
   const { user, loading } = useAuth();
   if (loading) return <Splash />;
   if (!user) return <Navigate to="/" replace />;
-  if (user.onboarding_done) return <Navigate to="/app" replace />;
+  // Honor the local flag too — if onboarding was already completed in a
+  // previous session, do not show it again.
+  if (user.onboarding_done || isOnboardingCompletedLocally()) {
+    return <Navigate to="/app" replace />;
+  }
   return children;
 }
 

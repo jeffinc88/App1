@@ -42,6 +42,16 @@ export default function OnboardingScreen() {
     if (submitting) return;
     setSubmitting(true);
 
+    // 0. CRITICAL: persist the "onboarding done" flag in localStorage FIRST,
+    //    synchronously, before any async work. This guarantees that even if
+    //    the user closes/reopens the app, refreshes, or the backend never
+    //    receives our update, the router treats the user as onboarded.
+    try {
+      localStorage.setItem("onboarding_completed", "true");
+    } catch (_e) {
+      /* localStorage may be unavailable (private mode) — ignore */
+    }
+
     // Helper: wrap any promise with a timeout so the UI never hangs forever.
     const withTimeout = (p, ms = 6000) =>
       Promise.race([
