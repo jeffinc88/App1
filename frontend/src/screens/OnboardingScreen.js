@@ -42,13 +42,22 @@ export default function OnboardingScreen() {
     if (submitting) return;
     setSubmitting(true);
 
+    // Helper: wrap any promise with a timeout so the UI never hangs forever.
+    const withTimeout = (p, ms = 6000) =>
+      Promise.race([
+        p,
+        new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), ms)),
+      ]);
+
     // 1. Try to persist onboarding on the backend (non-blocking for navigation).
     try {
-      await api.post("/auth/onboarding", {
-        nivel_ensino: nivel,
-        horas_diarias: hora,
-        objetivo: obj,
-      });
+      await withTimeout(
+        api.post("/auth/onboarding", {
+          nivel_ensino: nivel,
+          horas_diarias: hora,
+          objetivo: obj,
+        })
+      );
     } catch (e) {
       // Log but do NOT block navigation — user must reach /app no matter what.
       console.error("[onboarding] failed to persist preferences:", e);
@@ -61,15 +70,27 @@ export default function OnboardingScreen() {
       /* noop */
     }
 
-    // 3. Best-effort refresh from server (also non-blocking).
+    // 3. Best-effort refresh from server (also non-blocking, with timeout).
     try {
-      await refresh();
+      await withTimeout(refresh());
     } catch (e) {
       console.error("[onboarding] refresh failed:", e);
     }
 
-    // 4. Always navigate to the main app.
-    navigate("/app", { replace: true });
+    // 4. Navigate to the main app. Try React Router first, then hard-redirect
+    //    as a last-resort fallback so user is NEVER stuck on this screen.
+    try {
+      navigate("/app", { replace: true });
+    } catch (e) {
+      console.error("[onboarding] react-router navigate failed:", e);
+    }
+
+    // 5. Defensive hard redirect after a short tick if we're somehow still on /onboarding.
+    setTimeout(() => {
+      if (typeof window !== "undefined" && window.location.pathname.includes("/onboarding")) {
+        window.location.href = "/app";
+      }
+    }, 400);
   };
 
   const canNext = (step === 1 && !nivel) || (step === 2 && !hora) || (step === 3 && !obj);
@@ -196,7 +217,7 @@ export default function OnboardingScreen() {
             onClick={() => (step < total - 1 ? setStep(step + 1) : finish())}
             disabled={canNext || submitting}
             data-testid="onboarding-next"
-            className="sl-btn-primary flex items-center justify-center gap-2 disabled:opacity-60"
+            className="sl-btn-primary flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
           >
             {submitting ? (
               <>
