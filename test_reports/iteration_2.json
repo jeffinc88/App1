@@ -1,0 +1,50 @@
+{
+  "summary": "Iteration 2 — Frontend E2E retest after z-index fix. CRITICAL z-index bug FIXED: POST /api/materias now fires correctly (verified via network capture in 3 separate runs). Full happy path validated: register → 4-step onboarding (step 0 intro + nivel + hora + obj) → land on /app → tab-materias → open create-materia bottom-sheet → fill nome → submit-materia → POST /api/materias 201 → materia card 'materia-mat_xxx' appears in list → tap card → MateriaDetailScreen loads → add-fonte-button opens add-content-sheet → tipo-texto → fill titulo + 500-char conteudo → submit-fonte → AI Claude Sonnet 4.5 generates questions & flashcards in ~20-25s (POST /api/fontes/text returned 200) → fonte card appears → Home shows '6 questões esperando' confirming questions were generated → hero-5min routes to /app/quiz/5min and loads quiz-screen (GET /api/questoes/5min status 200, multiple polls). Perfil + Paywall + Logout flows verified in earlier runs (paywall opens/closes, logout returns to /login).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Add link fonte (POST /api/fontes/link) — wikipedia URL",
+        "issue": "Tipo-link button is partially off-screen inside the add-content-sheet (sheet is max-h-[88vh] with internal scroll). Playwright reported 'Element is outside of the viewport' even after auto-scroll. UX-wise on a real device the user would scroll, but it caused our automated link test to fail. Texto flow (which is the first tipo card) worked fine, suggesting only the layout order is the issue. NOT reproduced as a real user-facing bug — recommend reordering tipo cards or compacting the grid so tipo-link is visible without scroll. Could NOT verify link AI generation via UI (backend test already confirms this endpoint returns 200 for wikipedia URLs in pytest suite from iteration_1).",
+        "affected_selectors": ["[data-testid=\"tipo-link\"]", "[data-testid=\"add-content-sheet\"]"]
+      },
+      {
+        "flow": "Perfil tab navigation after returning from /app/quiz/5min",
+        "issue": "After hero-5min routed to /quiz/5min and we navigated back to /app, tab-perfil click was intercepted by the re-rendered Emergent badge. Removing the badge worked earlier but it re-renders on route changes. Workaround: re-remove or use page.evaluate to click directly. NOT a real-user blocker but worth noting for tests."
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "MateriaDetailScreen add-content-sheet",
+        "issues": [
+          "Tipo grid (texto/link/pdf/foto) plus title field plus form fields make the sheet content slightly taller than 88vh on 414x896 mobile; user must scroll inside the sheet. Consider compacting the tipo cards into a 4-column row of icons or reducing card padding."
+        ]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_studyloop.py",
+    "/app/test_reports/pytest/studyloop_results.xml"
+  ],
+  "action_items": [
+    "OPTIONAL: Reorder/compact tipo cards in AddContentSheet so all four (texto/link/pdf/foto) and form footer fit within 88vh on a 414x896 viewport without scroll. Current order is texto/link/pdf/foto and the link button sits at the visual fold.",
+    "OPTIONAL: Add scroll-into-view on the active tipo selection inside the sheet (e.g., useEffect that scrolls submit-fonte into view after tipo is chosen)."
+  ],
+  "critical_code_review_comments": [
+    "Z-index fix verified working: bottom-sheets at z-[60], backdrops at z-[55], bottom-nav at z-50. Stacking is now unambiguous.",
+    "Add-content-sheet content uses max-h-[88vh] overflow-y-auto sl-scroll which is correct, but the visible content density makes the second-row tipo buttons (pdf/foto) and link button border the fold line.",
+    "AI generation (Claude Sonnet 4.5) is solidly working — texto fonte returned 200 within ~20s with 6+ questions generated, confirmed by Home screen 'Modo 5 minutos — 6 questões esperando por você'."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (no backend changes, prior pytest at 18/18)", "frontend": "~95% (core happy path validated end-to-end; only minor sheet-scroll issue blocks the link-fonte UI sub-test)"},
+  "test_credentials": "Fresh users created via UI: TEST_e2e_<timestamp>@studyloop.app / senha12345. Persistent demo user: demo@studyloop.app / senha123.",
+  "seed_data_creation": "Each run creates a fresh user + 1 materia (Biologia E2E) + 1 texto fonte (Fotossíntese E2E, ~500 chars) which triggers AI generation producing 6+ questions and several flashcards. Data is namespaced under random user IDs so no manual cleanup needed.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "The original z-index bug from iteration_1 is RESOLVED. Full register→onboarding→materia→texto-fonte→AI-generation→5min-quiz path is validated via Playwright. Remaining minor item: AddContentSheet content height on 414x896 mobile forces internal scroll for the tipo-link button — this is a small UX polish, not a blocker. Backend pytest suite (/app/backend/tests/test_studyloop.py) is unchanged and was 18/18 last run; rerun only if backend code changes. To retest just the link flow: open the add-content sheet, scroll the sheet container down so tipo-link is in view, then click.",
+  "rca of the issue": "Original z-index bug: MateriasScreen bottom-sheet shared z-50 with the global bottom-nav, causing click events on submit-materia to bubble/route to the bottom-nav (silently navigating to /app/social with no POST). Fix in iteration 2: bottom-sheet panels raised to z-[60] and backdrops to z-[55] in MateriasScreen.js, MateriaDetailScreen.js, and PerfilScreen.js. Verified by Playwright: POST /api/materias now fires (1 request captured), materia card immediately appears in the list, materia detail screen opens, AI fonte ingestion flow completes end-to-end. No further code action needed."
+}

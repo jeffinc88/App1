@@ -1,0 +1,62 @@
+{
+  "summary": "End-to-end testing of StudyLoop MVP. Backend: 18/18 pytest cases PASSED including full AI generation flow (Claude Sonnet 4.5 generated questions and flashcards in ~15-25s; link-scraping flow against Wikipedia also passed). Frontend: login/register, onboarding (4 steps), AppShell with 4 bottom-nav tabs, Home (hero-5min, stats), Materias screen render, Perfil (heatmap, paywall modal with R$29/mês), Social screen (4 feature cards: Grupos, Duelos 1v1, Biblioteca, Ranking & Ligas) all render correctly. Critical issue found in MateriasScreen create-materia bottom-sheet — clicking submit-materia button does NOT trigger the POST /api/materias call; instead URL silently changes from /app/materias to /app/social. No POST is sent, materia is never persisted. This blocks the downstream content-ingestion → quiz → flashcards flows from being tested via UI.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "MateriasScreen create-materia bottom-sheet",
+        "issue": "Clicking [data-testid=submit-materia] does NOT POST /api/materias. Network capture confirmed only GET /api/materias (from useEffect) fires after submit. URL silently changes to /app/social. The bottom-sheet motion.div uses z-50 (same as bottom-nav in AppLayout), causing potential stacking/click-through ambiguity. The form onSubmit={create} handler with e.preventDefault appears not to fire when the submit button is clicked while the framer-motion modal is animating; element is reported by Playwright as 'not stable' without force=True, and with force=True the click somehow bubbles to bottom-nav (tab-social).",
+        "selector": "[data-testid=\"submit-materia\"]",
+        "priority": "CRITICAL"
+      },
+      {
+        "component": "Login screen footer",
+        "issue": "Emergent badge (<a id=\"emergent-badge\">) intercepts pointer events on [data-testid=\"toggle-mode\"] (Não tem conta? Cadastre-se link) at the bottom of the login screen. Real users on smaller screens may have trouble tapping the toggle. Tests must remove the badge or use force=True.",
+        "selector": "[data-testid=\"toggle-mode\"]",
+        "priority": "MEDIUM"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Create matéria → list → detail → add content → quiz/flashcards",
+        "issue": "Blocked at the very first step (create matéria) due to the submit bug above. As a result, MateriaDetailScreen, AddContentSheet, QuizScreen, and FlashcardScreen could not be UI-tested. Backend equivalents for all these flows PASS via pytest, so the bug is purely a frontend interaction issue with the bottom-sheet submit button.",
+        "affected_selectors": ["[data-testid=\"submit-materia\"]", "[data-testid=\"materia-<id>\"]", "[data-testid=\"add-fonte-button\"]", "[data-testid=\"submit-fonte\"]", "[data-testid=\"start-quiz\"]", "[data-testid=\"start-flashcards\"]"]
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "Global (AppLayout)",
+        "issues": [
+          "Bottom-nav uses z-50, identical to every bottom-sheet modal (MateriasScreen, MateriaDetailScreen, PerfilScreen paywall). With same z-index, stacking depends on DOM order — error-prone. Recommend: bottom-nav z-40 OR bottom-sheets z-[60]."
+        ]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_studyloop.py",
+    "/app/test_reports/pytest/studyloop_results.xml"
+  ],
+  "action_items": [
+    "FIX: Investigate why MateriasScreen submit-materia does not trigger create(). Likely fix: raise the bottom-sheet z-index to z-[60] (above bottom-nav z-50) so the submit click can never bubble/route to tab-social. Verify the same change is applied to AddContentSheet in MateriaDetailScreen and the paywall modal in PerfilScreen.",
+    "FIX: Either move the 'Emergent badge' programmatically out of the tappable area of the Cadastre-se link on LoginScreen, or add extra bottom padding so the toggle-mode button is comfortably tappable above the badge.",
+    "RECOMMEND: Add data-testid=\"input-name\" exists ✓ (already present). data-testid=\"materia-<id>\" exists ✓. Confirm same z-index audit for any future modal additions."
+  ],
+  "critical_code_review_comments": [
+    "Z-index conflict: AppLayout bottom-nav (line 30) uses z-50 — every bottom-sheet across the app also uses z-50. Modals/sheets should be ≥ z-60 to be safe.",
+    "MateriasScreen.create() only re-loads materias after a successful POST; it does not show any toast/error UI if the POST fails. A silent failure (as observed in testing) is invisible to the user.",
+    "PerfilScreen logout-btn: not visible in initial viewport on first render; needs scroll. Acceptable but worth noting.",
+    "server.py is 789 lines — borderline; consider splitting into routers/auth.py, routers/materias.py, services/ai.py for maintainability.",
+    "_create_fonte_and_generate uses await db.fontes.update_one within a try/except that re-raises — fonte is left as 'error' status. This is correct, but POST /api/fontes/text returns 500 instead of returning the fonte doc with status='error'. Consider returning the fonte doc with the error state so frontend can show a retry UI."
+  ],
+  "updated_files": ["/app/backend/tests/test_studyloop.py"],
+  "success_rate": {"backend": "100%", "frontend": "~70% (blocked by materia create bug)"},
+  "test_credentials": "demo@studyloop.app / senha123 (per /app/memory/test_credentials.md). Tests also create fresh TEST_<uuid>@studyloop.app users.",
+  "seed_data_creation": "Each test run creates a fresh user + materia + fonte. Test data is prefixed with TEST_ for easy identification. No automatic cleanup yet — recommend adding a teardown later, but volume is low.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend pytest suite at /app/backend/tests/test_studyloop.py — 18/18 pass in ~70s (AI generation included). For frontend re-test after fix: register via UI, complete onboarding, create materia, tap materia → add text content (~30-45s AI wait), then quiz + flashcards. Use force=True or remove emergent-badge to avoid overlay interception of toggle-mode. After main agent raises bottom-sheet z-index above bottom-nav, the create-materia POST should fire correctly.",
+  "rca of the issue": "RCA: MateriasScreen bottom-sheet (z-50) shares the same z-index as the global bottom-nav in AppLayout (z-50). When Playwright issues a click on [data-testid=submit-materia] with force=True (and likely on slower mobile devices for real users with imprecise touch), the event target resolution is ambiguous. Empirically the navigation routes to /app/social — meaning the click registered on the bottom-nav's tab-social tab instead of the submit button. Confirmed by network capture: zero POSTs to /api/materias after submit click; only the regular GET /api/materias from useEffect on mount. Reproduction: 1) register new user, 2) complete onboarding, 3) navigate to Matérias tab, 4) click '+', 5) fill nome, 6) click 'Criar matéria' — observe URL becomes /app/social with no POST. Mitigation: change the modal motion.div className from `z-50` to `z-[60]` in MateriasScreen.js (line 95), MateriaDetailScreen.js (line 176), PerfilScreen.js (line 166); OR change AppLayout bottom-nav z-50 → z-40 (line 30)."
+}

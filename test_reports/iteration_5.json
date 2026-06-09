@@ -1,0 +1,45 @@
+{
+  "summary": "Iteration 5 — NPS Survey. Backend: 7/7 tests PASS (eligibility 14d+3 sessões, snooze with max 2 attempts, permanent dismiss, submit, 401/400 errors). Regression: 23/23 prior tests PASS. Frontend: NPS modal triggers correctly on Home for eligible user (with 900ms delay), all data-testids present, submit/snooze flow works functionally and modal does NOT reappear after submit. CRITICAL UI BUG FOUND: framer-motion `animate={{ y: 0 }}` overrides the CSS `-translate-x-1/2` transform, causing the modal to render at x=207 instead of x=0 on a 414px viewport — modal is 50% off-screen to the right. Real users on mobile would not be able to see/interact with the scale buttons 6-10, submit button, etc.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "NpsModal.js (line 47-51)",
+        "issue": "Modal renders at x=207 on 414px viewport (overflowing right by 207px). Cause: framer-motion's `animate={{ y: 0 }}` sets `transform: translateY(0px)` inline which OVERRIDES the Tailwind class `-translate-x-1/2`. The combination `left-1/2 -translate-x-1/2` no longer centers because translateX is wiped out by framer-motion's transform. Fix: replace `left-1/2 -translate-x-1/2` with `left-0 right-0 mx-auto` OR use framer-motion's `x` prop alongside `y` (e.g., animate={{ x: '-50%', y: 0 }}) OR wrap motion.div in a positioning div.",
+        "selector": "[data-testid='nps-modal']",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_nps.py",
+    "/app/test_reports/pytest/nps_results.xml",
+    "/app/backend/tests/test_studyloop.py"
+  ],
+  "action_items": [
+    "Fix NpsModal horizontal positioning. Replace `fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md` with `fixed bottom-0 inset-x-0 mx-auto w-full max-w-md` (and remove the left-1/2 / -translate-x-1/2). Alternative: keep transform intact by using framer-motion's `style={{ x: '-50%' }}` so motion preserves both axes."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now 927 lines — exceeds 700-line guideline. Consider splitting NPS, materias, fontes, etc. into separate routers.",
+    "_nps_should_show() correctly excludes users with status=='answered' OR attempts>=MAX. Logic is sound for the 2-attempts-total rule.",
+    "POST /nps/submit always sets attempts to 1 on creation but does NOT increment attempts when updating an existing record. This is correct because answering ends the lifecycle, but worth a code comment.",
+    "POST /nps/snooze when called with no existing record creates attempts=1. If NPS_MAX_ATTEMPTS were ever 1, this branch wouldn't auto-dismiss. Currently fine since MAX=2.",
+    "NpsModal's backdrop onClick triggers snooze() — clicking outside is treated as 'agora não'. This is consistent with the X icon behaviour and the spec ('X icon at top-right ALSO triggers snooze').",
+    "No throttle/lock on rapid double-click of nps-submit; could cause two POST /nps/submit requests. Minor."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_nps.py (new)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "85% (functional flow works but modal mis-positioned)"},
+  "test_credentials": "demo@studyloop.app / senha123 (existing). For NPS testing, register a fresh user via /api/auth/register and time-travel via Motor: db.users.update_one({user_id}, {$set: {created_at: (now-15d).isoformat(), onboarding_done: True}}), then insert 3 docs in db.sessoes with concluida=True and matching user_id.",
+  "seed_data_creation": "Tests create users with TEST_ prefix and clean up after themselves. No persistent seed data added.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend NPS endpoints are solid (7/7 pass). The frontend modal has ONE critical positioning bug — once fixed (single-line CSS change in NpsModal.js), retest with a Mongo-aged user. Login flow: register → set onboarding_done=True + created_at to (now-15d) + insert 3 sessoes → login → wait 2.5s on /app → modal should appear centered.",
+  "rca of the issue": "ROOT CAUSE: framer-motion writes an inline `style.transform` from its `animate` prop. The motion.div has className='... left-1/2 -translate-x-1/2 ...' which produces `transform: translateX(-50%)` via Tailwind. But framer-motion's `animate={{ y: 0 }}` outputs `transform: translateY(0px)` inline, and inline transform OVERRIDES the Tailwind utility transform. Result: only translateY applies; translateX(-50%) is lost, so the modal sits at left:50% with no left shift, pushing it 207px (=414/2) to the right of center. REPRODUCTION: mobile viewport 414x896, register/age user, login → /app → wait 2.5s → measure data-testid='nps-modal' boundingClientRect: x=207, right=621, viewport=414. MITIGATION: 1) Move the centering off `transform` — use `inset-x-0` + `mx-auto` for horizontal centering. 2) OR pass x via framer-motion: `style={{ x: '-50%' }}` (set once) and only animate y. 3) OR wrap the motion.div in a non-animated parent that handles positioning."
+}

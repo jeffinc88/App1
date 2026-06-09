@@ -1,0 +1,149 @@
+{
+  "theme": "dark",
+  "archetype": "Archetype 1 (Organic/Focus) Dark Variant + Archetype 4 clarity",
+  "design_philosophy": "A frictionless, focus-driven mobile-first web app for Brazilian students. Reduces cognitive load via a 'deep ink' dark theme with warm amber/citrus accents for gamification. Combines Swiss UI clarity for reading/studying with Organic warmth to feel rewarding, not robotic.",
+  "colors": {
+    "background": {
+      "app": "#090A0F",
+      "surface": "#12141D",
+      "surface_elevated": "#1A1D27"
+    },
+    "text": {
+      "primary": "#F8FAFC",
+      "secondary": "#94A3B8",
+      "tertiary": "#64748B"
+    },
+    "border": {
+      "default": "#262A36",
+      "focus": "#F5A623"
+    },
+    "accent": {
+      "primary": "#F5A623",
+      "primary_hover": "#FFB800",
+      "streak": "linear-gradient(135deg, #F5A623 0%, #FF7B00 100%)"
+    },
+    "feedback": {
+      "success": "#4ADE80",
+      "error": "#FF6B6B",
+      "warning": "#FBBF24"
+    },
+    "srs": {
+      "easy": "#4ADE80",
+      "good": "#60A5FA",
+      "hard": "#FBBF24",
+      "wrong": "#FF6B6B"
+    }
+  },
+  "typography": {
+    "font_family": {
+      "heading": "Outfit, sans-serif",
+      "body": "DM Sans, sans-serif"
+    },
+    "scales": {
+      "h1": "text-3xl font-bold tracking-tight text-white",
+      "h2": "text-2xl font-semibold tracking-tight text-white",
+      "h3": "text-xl font-medium text-white",
+      "body": "text-base font-normal text-slate-400 leading-relaxed",
+      "small": "text-sm font-medium text-slate-500 uppercase tracking-[0.1em]"
+    }
+  },
+  "spacing_and_layout": {
+    "container": "w-full max-w-md mx-auto h-[100dvh] overflow-x-hidden overflow-y-auto bg-[#090A0F] relative shadow-2xl",
+    "desktop_wrapper": "min-h-screen bg-black/95 flex items-center justify-center p-0 sm:p-4",
+    "padding": {
+      "screen": "px-5 py-6",
+      "card": "p-5",
+      "bottom_nav_offset": "pb-24"
+    },
+    "border_radius": {
+      "card": "rounded-2xl",
+      "button": "rounded-xl",
+      "pill": "rounded-full"
+    }
+  },
+  "animations": {
+    "flashcard_flip": "transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1); transform-style: preserve-3d; rotateY(180deg)",
+    "error_shake": "x: [-8, 8, -6, 6, -4, 4, 0], transition: { duration: 0.4 }",
+    "success_pulse": "scale: [1, 1.05, 1], transition: { duration: 0.3 }",
+    "page_transition": "initial: { opacity: 0, y: 10 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0, y: -10 }"
+  },
+  "components": {
+    "bottom_nav": "fixed bottom-0 w-full max-w-md bg-[#12141D]/90 backdrop-blur-xl border-t border-[#262A36] flex justify-around items-center h-20 pb-safe z-50",
+    "hero_card_5_min": "relative overflow-hidden rounded-3xl p-6 bg-gradient-to-br from-[#12141D] to-[#1A1D27] border border-[#F5A623]/20 shadow-[0_0_30px_rgba(245,166,35,0.1)]",
+    "subject_card": "flex items-center p-4 rounded-2xl bg-[#12141D] border border-[#262A36] hover:border-[#F5A623]/50 transition-colors",
+    "action_button": "w-full py-4 rounded-xl font-bold text-[#090A0F] bg-[#F5A623] hover:bg-[#FFB800] transition-transform active:scale-95",
+    "srs_button": "flex-1 py-3 rounded-xl font-medium text-sm transition-transform active:scale-95 text-white bg-[#1A1D27] hover:bg-[#262A36]"
+  },
+  "pages_and_features": {
+    "onboarding_and_auth": {
+      "layout": "Minimalist screens with abstract 3D amber/dark geometric assets. Large typography.",
+      "auth_methods": "JWT Custom (Email/Senha), Google, Apple. Stacked wide buttons."
+    },
+    "home_inicio": {
+      "elements": [
+        "Greeting & Streak Indicator (Flame icon + count in amber)",
+        "Hero Card: 'Modo 5 minutos' with count of waiting questions, pulse animation on the CTA",
+        "Continue Studying Card: Links to the last accessed subject"
+      ]
+    },
+    "materias": {
+      "elements": [
+        "Grid/List of subjects with progress bars",
+        "FAB (Floating Action Button) to add new subject"
+      ]
+    },
+    "subject_detail": {
+      "elements": [
+        "Content Sources list (Text, PDF, Photo, Link icons)",
+        "AI summary previews",
+        "Sticky bottom bar with 'Start Quiz' or 'Flashcards' CTAs"
+      ]
+    },
+    "add_content_modal": {
+      "layout": "Bottom sheet (BottomSheet) occupying 80% of screen height.",
+      "flow": "Select Type (4 grids) -> Type-specific input (Camera for photo, Textarea, URL input, File upload) -> Select Subject -> Generate"
+    },
+    "quiz_session": {
+      "layout": "Question card center, progress dots top.",
+      "interactions": "Select option -> Confirm -> Instant haptic/visual feedback (Green pulse or Red shake) -> Explanation panel expands."
+    },
+    "flashcard_session": {
+      "layout": "Large 3D card centered.",
+      "interactions": "Tap to flip (smooth 3D animation). Bottom reveals 4 SRS rating buttons: Errei (Red), Difícil (Amber), Bom (Blue), Fácil (Green)."
+    },
+    "perfil": {
+      "layout": "Header with Avatar and Level.",
+      "stats": "4-item grid (Questions answered, Accuracy, Streak, Hours).",
+      "heatmap": "GitHub-style 365 days contribution graph using amber scale for intensity.",
+      "settings": "List toggles including Dark Mode, Plan upgrade, Logout."
+    },
+    "social_preview": {
+      "layout": "Teaser cards for 'Em breve': Grupos de Estudo, Duelos 1v1, Biblioteca, Ranking.",
+      "vibe": "Glassmorphism overlays indicating locked/upcoming state."
+    },
+    "paywall_teaser": {
+      "layout": "Slide-up modal when free limit hit. Premium benefits listed with checkmarks. R$29/mês prominent CTA."
+    }
+  },
+  "testing_requirements": {
+    "attributes": "All interactive elements MUST have 'data-testid' (e.g., 'login-form-submit-button', 'tab-materias-button')"
+  },
+  "assets_and_icons": {
+    "icon_library": "lucide-react",
+    "images": {
+      "hero_background": "https://images.unsplash.com/photo-1746333540334-922f50a2748b?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA0MTJ8MHwxfHNlYXJjaHwxfHxhYnN0cmFjdCUyMDNkJTIwZ2VvbWV0cmljJTIwc2hhcGVzJTIwZGFyayUyMGJhY2tncm91bmQlMjBhbWJlcnxlbnwwfHx8fDE3ODA4NzgyNzZ8MA&ixlib=rb-4.1.0&q=85",
+      "student_avatar_1": "https://images.unsplash.com/photo-1694185749841-b501fc75faa9?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMjd8MHwxfHNlYXJjaHwzfHxicmF6aWxpYW4lMjBzdHVkZW50JTIwcG9ydHJhaXQlMjBuYXR1cmFsJTIwbGlnaHRpbmd8ZW58MHx8fHwxNzgwODc4Mjc2fDA&ixlib=rb-4.1.0&q=85",
+      "student_avatar_2": "https://images.unsplash.com/photo-1521817760127-e15c26f67fd2?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMjd8MHwxfHNlYXJjaHw0fHxicmF6aWxpYW4lMjBzdHVkZW50JTIwcG9ydHJhaXQlMjBuYXR1cmFsJTIwbGlnaHRpbmd8ZW58MHx8fHwxNzgwODc4Mjc2fDA&ixlib=rb-4.1.0&q=85",
+      "empty_state_graphic": "https://images.pexels.com/photos/13156181/pexels-photo-13156181.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Strictly adhere to the mobile-first wrapper (max-w-md mx-auto min-h-screen) with a deep dark background outside the app bounds to simulate a phone screen on desktop.",
+    "Implement the 4 bottom tabs with fixed positioning and safe-area padding.",
+    "Ensure all buttons and cards have active states (e.g., scale: 0.95 or translate-y-px) to mimic haptic touch.",
+    "Use Framer Motion for the Flashcard 3D flip and the quiz error shake.",
+    "Include 'data-testid' on all interactive elements as required.",
+    "Build the 'Modo 5 minutos' hero card to feel premium and action-oriented.",
+    "For the Profile heatmap, use small grid squares with varying opacities of the amber accent color."
+  ]
+}
