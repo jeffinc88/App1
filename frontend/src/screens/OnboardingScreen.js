@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { GraduationCap, Clock, Target, Sparkles, ChevronRight, Check } from "lucide-react";
+import { GraduationCap, Clock, Target, Sparkles, ChevronRight, Check, Loader2 } from "lucide-react";
 import { api } from "../api";
 import { useAuth } from "../AuthContext";
 
@@ -32,14 +32,43 @@ export default function OnboardingScreen() {
   const [nivel, setNivel] = useState(null);
   const [hora, setHora] = useState(null);
   const [obj, setObj] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
   const navigate = useNavigate();
-  const { refresh } = useAuth();
+  const { refresh, setUser } = useAuth();
 
   const total = 4;
 
   const finish = async () => {
-    await api.post("/auth/onboarding", { nivel_ensino: nivel, horas_diarias: hora });
-    await refresh();
+    if (submitting) return;
+    setSubmitting(true);
+
+    // 1. Try to persist onboarding on the backend (non-blocking for navigation).
+    try {
+      await api.post("/auth/onboarding", {
+        nivel_ensino: nivel,
+        horas_diarias: hora,
+        objetivo: obj,
+      });
+    } catch (e) {
+      // Log but do NOT block navigation — user must reach /app no matter what.
+      console.error("[onboarding] failed to persist preferences:", e);
+    }
+
+    // 2. Optimistically mark user as onboarded locally so ProtectedRoute lets us in.
+    try {
+      setUser((u) => (u ? { ...u, onboarding_done: true } : u));
+    } catch (_e) {
+      /* noop */
+    }
+
+    // 3. Best-effort refresh from server (also non-blocking).
+    try {
+      await refresh();
+    } catch (e) {
+      console.error("[onboarding] refresh failed:", e);
+    }
+
+    // 4. Always navigate to the main app.
     navigate("/app", { replace: true });
   };
 
@@ -165,14 +194,23 @@ export default function OnboardingScreen() {
         <div className="mt-6">
           <button
             onClick={() => (step < total - 1 ? setStep(step + 1) : finish())}
-            disabled={canNext}
+            disabled={canNext || submitting}
             data-testid="onboarding-next"
-            className="sl-btn-primary flex items-center justify-center gap-2"
+            className="sl-btn-primary flex items-center justify-center gap-2 disabled:opacity-60"
           >
-            {step === total - 1 ? "Começar a estudar" : "Continuar"}
-            <ChevronRight size={18} />
+            {submitting ? (
+              <>
+                <Loader2 size={18} className="animate-spin" />
+                Entrando...
+              </>
+            ) : (
+              <>
+                {step === total - 1 ? "Começar a estudar" : "Continuar"}
+                <ChevronRight size={18} />
+              </>
+            )}
           </button>
-          {step > 0 && (
+          {step > 0 && !submitting && (
             <button onClick={() => setStep(step - 1)} className="block mx-auto text-sm text-slate-400 mt-3" data-testid="onboarding-back">
               Voltar
             </button>
