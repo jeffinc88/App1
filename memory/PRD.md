@@ -58,13 +58,15 @@ The user attached `StudyLoop_Contexto_Desenvolvimento.docx`, a brief for **Study
 - **+ Painel Admin (iteration 7)**: `/admin` restrito ao email `jeffinc88@gmail.com` (frontend redirect + backend 403). `GET /api/admin/metrics` retorna usuários, ativação D7, retenção D30, qualidade IA (média estrelas), NPS (score + distribuição), monetização (Pro count, paywall CTR, lista de assinantes). UI desktop-friendly, auto-refresh a cada 30s.
 - **+ Correção de Acentuação (iteration 8)**: helper `_normalize_pt_title` aplicado em POST/PATCH `/api/materias` (campo nome) e em POST `/api/fontes/{text,link,pdf,photo}` (campo titulo). Estratégia híbrida: dict in-memory com ~40 termos comuns (instant) + Claude Sonnet 4.5 como fallback. Validado: "biologia"→"Biologia", "ligacoes quimicas"→"Ligações Químicas", "introducao a programacao"→"Introdução à Programação".
 - **+ Dica para Exatas (iteration 8)**: card 💡 "Dica para este material" exibido no MateriaDetailScreen logo antes dos CTAs Quiz/Flashcards quando o nome da matéria contém palavras-chave de exatas (matemática, física, cálculo, álgebra, geometria, trigonometria, estatística, química etc.). Detecção 100% client-side via normalização Unicode NFD. "Entendi" persiste `aviso_exatas_visto=true` via PATCH /api/materias e card não retorna.
+- **+ Stripe Live + CTR por Motivo + Customer Portal (iteration 9 — 2026-06-09)**:
+  - **Tarefa 1**: chaves Stripe configuradas em `/app/backend/.env` (`STRIPE_API_KEY`, `STRIPE_PRICE_ID`, `STRIPE_WEBHOOK_SECRET`). Upgrade endpoint testado retornando `checkout.stripe.com` URL real. Cartão de teste `4242 4242 4242 4242` validado: badge muda FREE→PRO após webhook `checkout.session.completed`.
+  - **Tarefa 2**: novo bloco "Funil de Monetização por Motivo" no painel `/admin` com 3 cards (Limite de fontes / Limite de sessões / Foto e PDF) mostrando exibições, cliques e CTR% por `motivo`, mais badge "TOP" no card vencedor e insight automático *"Melhor gate de conversão: [motivo] com [X]% de CTR"*. Backend agrega via `db.analytics_events` com `props.motivo`.
+  - **Tarefa 3**: novo endpoint `POST /api/plan/customer-portal` cria sessão Stripe Billing Portal e retorna `portal_url`. Botão "Gerenciar assinatura" (ícone Settings) na tela `/app/perfil` visível **apenas para usuários Pro** (`data-testid="manage-subscription-btn"`) redireciona para portal autosserviço (cancelar, trocar cartão, ver faturas). Validado contra Stripe real retornando `billing.stripe.com/p/session/...`.
 
 ## Backlog (P1)
 - Apple Sign-In (precisa Apple Developer Account + Service ID + .p8)
 - Push notifications (web push API)
 - Offline mode com IndexedDB
-- Compactar AddContentSheet quando todos 4 tipos de conteúdo + form estiverem visíveis em viewports muito pequenos (parcialmente resolvido em iteration 2)
-- Stripe + Cobrança real para Pro (atualmente paywall é teaser)
 
 ## Backlog (P2)
 - Social real: grupos, duelos 1v1, biblioteca colaborativa, ranking

@@ -147,6 +147,71 @@ export default function AdminScreen() {
                 <Metric label="CTR do paywall" value={`${data.monetizacao.paywall_ctr_pct}%`} icon={TrendingUp} color="#4ADE80" testid="m-mon-ctr" />
               </div>
 
+              {/* Funil de Monetização por Motivo */}
+              {data.monetizacao.funil_por_motivo && (
+                <div className="mt-6">
+                  <h3 className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.15em] text-slate-400 mb-3">
+                    <TrendingUp size={13} className="text-[#F5A623]" />
+                    Funil de Monetização por Motivo
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3" data-testid="funil-por-motivo">
+                    {data.monetizacao.funil_por_motivo.map((f) => {
+                      const isBest =
+                        data.monetizacao.melhor_gate &&
+                        data.monetizacao.melhor_gate.motivo === f.motivo &&
+                        f.ctr_pct > 0;
+                      return (
+                        <div
+                          key={f.motivo}
+                          className={`sl-card p-5 relative overflow-hidden ${isBest ? "border-[#F5A623]/60" : ""}`}
+                          data-testid={`funil-card-${f.motivo}`}
+                        >
+                          {isBest && (
+                            <span className="absolute top-3 right-3 text-[9px] uppercase tracking-[0.15em] bg-[#F5A623] text-[#090A0F] px-2 py-0.5 rounded-full font-bold">
+                              Top
+                            </span>
+                          )}
+                          <p className="text-xs uppercase tracking-wider text-slate-500 font-semibold">{f.label}</p>
+                          <div className="flex items-end gap-2 mt-3">
+                            <span className="text-4xl font-bold heading text-[#F5A623]" data-testid={`funil-ctr-${f.motivo}`}>
+                              {f.ctr_pct}%
+                            </span>
+                            <span className="text-xs text-slate-500 mb-1">CTR</span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2 mt-4 pt-3 border-t border-[#262A36]">
+                            <div>
+                              <p className="text-[10px] uppercase tracking-wider text-slate-500">Exibições</p>
+                              <p className="font-bold text-base mt-0.5" data-testid={`funil-shown-${f.motivo}`}>{f.exibicoes}</p>
+                            </div>
+                            <div>
+                              <p className="text-[10px] uppercase tracking-wider text-slate-500">Cliques</p>
+                              <p className="font-bold text-base mt-0.5" data-testid={`funil-clicks-${f.motivo}`}>{f.cliques}</p>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {data.monetizacao.melhor_gate_insight && (
+                    <div
+                      className="mt-4 sl-card p-4 flex items-start gap-3 border-[#F5A623]/30 bg-gradient-to-br from-[#F5A623]/[0.06] to-transparent"
+                      data-testid="funil-insight"
+                    >
+                      <div className="w-9 h-9 rounded-xl bg-[#F5A623]/15 text-[#F5A623] flex items-center justify-center shrink-0">
+                        <TrendingUp size={16} />
+                      </div>
+                      <div className="flex-1 text-sm">
+                        <p className="text-[10px] uppercase tracking-wider text-[#F5A623] font-bold mb-0.5">Insight automático</p>
+                        <p className="text-slate-100" data-testid="funil-insight-text">
+                          {data.monetizacao.melhor_gate_insight}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="mt-5 sl-card p-0 overflow-hidden">
                 <div className="px-5 py-4 border-b border-[#262A36] flex items-center justify-between">
                   <p className="font-semibold heading">Assinantes Pro</p>

@@ -463,6 +463,41 @@ async def plan_upgrade(request: Request, user: dict = Depends(current_user)):
     return {"ok": True, "checkout_url": session.url, "session_id": session.id}
 
 
+@api.post("/plan/customer-portal")
+async def plan_customer_portal(request: Request, user: dict = Depends(current_user)):
+    """Creates a Stripe Customer Portal session so Pro users can manage their
+    subscription (cancel, swap card, view invoices). Returns the portal URL.
+    """
+    if user.get("plano") != "pro":
+        raise HTTPException(403, "Disponível apenas para usuários Pro")
+
+    if not STRIPE_API_KEY:
+        raise HTTPException(500, "Stripe não configurado (STRIPE_API_KEY ausente)")
+
+    customer_id = user.get("stripe_customer_id")
+    if not customer_id:
+        raise HTTPException(404, "Cliente Stripe não encontrado para este usuário")
+
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    origin_url = (body.get("origin_url") or request.headers.get("origin") or "").rstrip("/")
+    if not origin_url:
+        raise HTTPException(400, "origin_url obrigatório")
+
+    return_url = f"{origin_url}/app/perfil"
+
+    try:
+        portal = stripe.billing_portal.Session.create(
+            customer=customer_id,
+            return_url=return_url,
+        )
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe portal error: {e}")
+        msg = getattr(e, "user_message", None) or str(e)
+        raise HTTPException(502, f"Erro Stripe: {msg}")
+
+    return {"ok": True, "portal_url": portal.url}
+
+
 @api.get("/plan/checkout-status/{session_id}")
 async def plan_checkout_status(session_id: str, user: dict = Depends(current_user)):
     """Frontend polls this after returning from Stripe. We re-fetch the session and
@@ -709,6 +744,40 @@ async def admin_metrics(_: dict = Depends(require_admin)):
     unique_tapped = len([u for u in tapped_user_ids if u in shown_user_ids])
     paywall_ctr = round((unique_tapped / unique_shown * 100), 1) if unique_shown else 0.0
 
+    # CTR by motivo (gate de conversão segmentado)
+    motivos = ["fonte_limite", "sessao_limite", "foto_pdf"]
+    motivo_labels = {
+        "fonte_limite": "Limite de fontes",
+        "sessao_limite": "Limite de sessões",
+        "foto_pdf": "Foto e PDF",
+    }
+    funil_por_motivo = []
+    for mv in motivos:
+        shown = await db.analytics_events.count_documents({
+            "name": "paywall_shown",
+            "props.motivo": mv,
+        })
+        tapped = await db.analytics_events.count_documents({
+            "name": "paywall_cta_tapped",
+            "props.motivo": mv,
+        })
+        ctr = round((tapped / shown * 100), 1) if shown else 0.0
+        funil_por_motivo.append({
+            "motivo": mv,
+            "label": motivo_labels[mv],
+            "exibicoes": shown,
+            "cliques": tapped,
+            "ctr_pct": ctr,
+        })
+    melhor_gate = max(funil_por_motivo, key=lambda x: x["ctr_pct"]) if funil_por_motivo else None
+    # If all CTR are 0, treat as "sem dados ainda"
+    if melhor_gate and melhor_gate["ctr_pct"] == 0:
+        melhor_gate_insight = "Ainda sem cliques suficientes para definir o melhor gate."
+    elif melhor_gate:
+        melhor_gate_insight = f"Melhor gate de conversão: {melhor_gate['label']} com {melhor_gate['ctr_pct']}% de CTR"
+    else:
+        melhor_gate_insight = ""
+
     return {
         "generated_at": now.isoformat(),
         "users": {
@@ -740,6 +809,9 @@ async def admin_metrics(_: dict = Depends(require_admin)):
             "paywall_unique_shown_users": unique_shown,
             "paywall_unique_tapped_users": unique_tapped,
             "paywall_ctr_pct": paywall_ctr,
+            "funil_por_motivo": funil_por_motivo,
+            "melhor_gate": melhor_gate,
+            "melhor_gate_insight": melhor_gate_insight,
             "pro_users": pro_users,
         },
     }

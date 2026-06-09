@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { Flame, Target, Clock, Award, LogOut, Crown, ChevronRight, Trophy, Zap, BookCheck, Loader2, Check, X } from "lucide-react";
+import { Flame, Target, Clock, Award, LogOut, Crown, ChevronRight, Trophy, Zap, BookCheck, Loader2, Check, X, Settings } from "lucide-react";
 import { api } from "../api";
 import { useAuth } from "../AuthContext";
 import { usePaywall } from "../PaywallContext";
@@ -13,6 +13,27 @@ export default function PerfilScreen() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [checkout, setCheckout] = useState(null); // {state: 'polling'|'success'|'cancelled'|'failed', message?}
   const navigate = useNavigate();
+  const [portalLoading, setPortalLoading] = useState(false);
+  const [portalError, setPortalError] = useState(null);
+
+  const openCustomerPortal = async () => {
+    setPortalError(null);
+    setPortalLoading(true);
+    try {
+      const { data } = await api.post("/plan/customer-portal", {
+        origin_url: window.location.origin,
+      });
+      if (data.portal_url) {
+        window.location.href = data.portal_url;
+        return;
+      }
+      throw new Error("Resposta inválida do servidor");
+    } catch (e) {
+      const detail = e?.response?.data?.detail;
+      setPortalError(typeof detail === "string" ? detail : (e.message || "Não foi possível abrir o portal."));
+      setPortalLoading(false);
+    }
+  };
 
   useEffect(() => { api.get("/stats").then(r => setStats(r.data)); }, []);
 
@@ -205,6 +226,32 @@ export default function PerfilScreen() {
             <ChevronRight size={18} className="text-[#F5A623]" />
           </div>
         </motion.button>
+      )}
+
+      {/* Gerenciar assinatura — visible only to Pro users */}
+      {user?.plano === "pro" && (
+        <div className="mb-3">
+          <button
+            onClick={openCustomerPortal}
+            disabled={portalLoading}
+            className="w-full sl-card p-4 flex items-center gap-3 active:scale-[0.98] transition border-[#F5A623]/30 disabled:opacity-60"
+            data-testid="manage-subscription-btn"
+          >
+            <div className="w-10 h-10 rounded-xl bg-[#F5A623]/15 text-[#F5A623] flex items-center justify-center">
+              {portalLoading ? <Loader2 size={18} className="animate-spin" /> : <Settings size={18} />}
+            </div>
+            <div className="flex-1 text-left">
+              <p className="font-medium">Gerenciar assinatura</p>
+              <p className="text-xs text-slate-400">Cancelar, trocar cartão e ver faturas</p>
+            </div>
+            <ChevronRight size={18} className="text-slate-500" />
+          </button>
+          {portalError && (
+            <p className="text-[#FF6B6B] text-xs mt-2 px-1" data-testid="manage-subscription-error">
+              {portalError}
+            </p>
+          )}
+        </div>
       )}
 
       {/* Admin link — visible only to admin email */}
